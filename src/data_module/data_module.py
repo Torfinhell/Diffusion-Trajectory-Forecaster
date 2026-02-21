@@ -4,7 +4,6 @@ from functools import partial
 import lightning as L
 import torch
 from hydra.core import instantiate
-from torch.utils.data import Dataloader
 
 from src.data_module.dataset import DiffusionTrackerDataset
 
@@ -53,17 +52,20 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
     def train_dataloader(self):
         return instantiate(
             self.train_dl_cfg,
+            collate_fn=collate_fn,
             dataset=self.train_dataset,
         )
 
     def val_dataloader(self):
         return instantiate(
             self.val_dl_cfg,
+            collate_fn=collate_fn,
             dataset=self.val_dataset,
         )
 
     def test_dataloader(self):
         return instantiate(
             self.test_dl_cfg,
+            collate_fn=collate_fn,
             dataset=self.test_dataset,
         )
