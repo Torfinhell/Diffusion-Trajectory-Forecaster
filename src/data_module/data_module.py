@@ -1,15 +1,15 @@
 from copy import deepcopy
+from functools import partial
 
 import lightning as L
 import torch
+from hydra.core import instantiate
+from torch.utils.data import Dataloader
+
+from src.data_module.dataset import DiffusionTrackerDataset
 
 
 def collate_fn(batch):
-    """
-    Custom collate function for DataLoader.
-    FCOS requires images as a list and targets as a list of dicts.
-    Handles variable-sized bounding boxes across batch.
-    """
 
     return {
         key: (
@@ -24,20 +24,46 @@ def collate_fn(batch):
 class DiffusionTrackerDataModule(L.LightningDataModule):
     def __init__(
         self,
+        train_ds_cfg,
+        val_ds_cfg,
+        test_ds_cfg,
+        train_dl_cfg,
+        val_dl_cfg,
+        test_dl_cfg,
     ):
         super().__init__()
+        self.train_ds_cfg = train_ds_cfg
+        self.val_ds_cfg = val_ds_cfg
+        self.test_ds_cfg = test_ds_cfg
+        self.train_dl_cfg = train_dl_cfg
+        self.val_dl_cfg = val_dl_cfg
+        self.test_dl_cfg = test_dl_cfg
 
     def setup(self, stage):
         if stage == "fit":
-            pass
-        if stage == "predict":
-            pass
+            if self.train_ds_cfg is not None:
+                self.train_dataset = DiffusionTrackerDataset(self.train_ds_cfg)
+            if self.val_ds_cfg is not None:
+                self.val_dataset = DiffusionTrackerDataset(self.val_ds_cfg)
+            if self.test_ds_cfg is not None:
+                self.test_dataset = DiffusionTrackerDataset(self.test_ds_cfg)
+        else:
+            raise NotImplementedError("Didnt implement not fit stage")
 
     def train_dataloader(self):
-        pass
+        return instantiate(
+            self.train_dl_cfg,
+            dataset=self.train_dataset,
+        )
 
     def val_dataloader(self):
-        pass
+        return instantiate(
+            self.val_dl_cfg,
+            dataset=self.val_dataset,
+        )
 
-    def predict_dataloader(self):
-        pass
+    def test_dataloader(self):
+        return instantiate(
+            self.test_dl_cfg,
+            dataset=self.test_dataset,
+        )
