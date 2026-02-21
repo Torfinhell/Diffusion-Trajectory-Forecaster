@@ -1,0 +1,7 @@
+defaults:
+  - model: null #TODO visualize multiple models simultaneously
+  - dataloaders: example
+  - datasets: example
+  - transforms: null
+  - _self_
+gcloud_token: null

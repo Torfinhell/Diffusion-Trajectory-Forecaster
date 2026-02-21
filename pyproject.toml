@@ -1,0 +1,12 @@
+[project]
+name = "diffusion-trajectory-forecaster"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "lightning>=2.6.1",
+    "matplotlib>=3.10.8",
+    "pre-commit>=4.5.1",
+    "torch>=2.10.0",
+]
