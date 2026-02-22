@@ -1,9 +1,8 @@
 train:
-  _target_: src.data_module.DiffusionTrackerDataset
-  waymax_config: waymax.config.WOD_1_3_1_TRAINING
+  _target_: src.data_module.dataset.DiffusionTrackerDataset
+  waymax_conf_version: WOD_1_3_1_TRAINING
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@"
-  max_num_states: 10
+  max_num_states: 1
   max_num_objects: 32
-  start_ind: 0
+  start_ind: 1000
   download: True
-  gcloud_token: None

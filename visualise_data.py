@@ -1,10 +1,10 @@
 import warnings
 
+import google
 import hydra
-import torch
 from hydra.utils import instantiate
 
-from src.data_module import DiffusionTrackerDataModule  # visualize_data
+from src.data_module import DiffusionTrackerDataModule  # , visualize_data
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -21,8 +21,9 @@ def main(config):
     """
     gcloud_token = config.gcloud_token
     if gcloud_token is not None:
-        pass
+        google.auth.default()
     data_module = DiffusionTrackerDataModule(**config.data_module)
+    data_module.setup("fit")
     # visualize_data(data_module.train_dataloader())
 
 
