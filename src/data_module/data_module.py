@@ -3,7 +3,7 @@ from functools import partial
 
 import lightning as L
 import torch
-from hydra.core import instantiate
+from hydra.utils import instantiate
 
 from src.data_module.dataset import DiffusionTrackerDataset
 
@@ -29,23 +29,24 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         train_dl_cfg,
         val_dl_cfg,
         test_dl_cfg,
+        **kwargs
     ):
         super().__init__()
         self.train_ds_cfg = train_ds_cfg
         self.val_ds_cfg = val_ds_cfg
         self.test_ds_cfg = test_ds_cfg
-        self.train_dl_cfg = train_dl_cfg
+        self.train_dl_cfg = train_ds_cfg
         self.val_dl_cfg = val_dl_cfg
         self.test_dl_cfg = test_dl_cfg
 
     def setup(self, stage):
         if stage == "fit":
             if self.train_ds_cfg is not None:
-                self.train_dataset = DiffusionTrackerDataset(self.train_ds_cfg)
+                self.train_dataset = instantiate(self.train_ds_cfg)
             if self.val_ds_cfg is not None:
-                self.val_dataset = DiffusionTrackerDataset(self.val_ds_cfg)
+                self.val_dataset = instantiate(self.val_ds_cfg)
             if self.test_ds_cfg is not None:
-                self.test_dataset = DiffusionTrackerDataset(self.test_ds_cfg)
+                self.test_dataset = instantiate(self.test_ds_cfg)
         else:
             raise NotImplementedError("Didnt implement not fit stage")
 
