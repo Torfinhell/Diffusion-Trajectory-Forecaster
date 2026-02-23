@@ -1,8 +1,0 @@
-data_module:
-  train_ds_cfg: ${datasets.example.train}
-  val_ds_cfg: null
-  test_ds_cfg: null
-  train_dl_cfg: ${dataloaders.example.train}
-  val_dl_cfg: null
-  test_dl_cfg: null
-gcloud_token: null
