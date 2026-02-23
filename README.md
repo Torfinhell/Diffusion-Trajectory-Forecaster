@@ -50,7 +50,7 @@ Log divergence measures how far the simulated trajectory deviates from the logge
 
 ### Example
 
-![Rollout](batch_rollout.gif)
+![Rollout](media/batch_rollout.gif)
 
 #### log_divergence: 60.71818017959595
 
