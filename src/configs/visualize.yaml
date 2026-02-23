@@ -7,4 +7,3 @@ defaults:
 viz:
   max_num_objects: 32
   render_every: 2
-  metrics_path: metrics.txt
