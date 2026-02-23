@@ -147,10 +147,6 @@ def visualize_data(dataloader, config, config_viz):
         )
 
     avg_metrics = average_episode_summaries(episode_summaries)
-
-    print(avg_metrics)
-    with open(config_viz.metrics_path, "w") as f:
-        for k, v in sorted(avg_metrics.items()):
-            print(f"{k}: {v}\n")
-    print(f"Saved metrics → {config_viz.metrics_path}")
+    for k, v in sorted(avg_metrics.items()):
+        print(f"{k}: {v}\n")
     save_grid_gif(all_imgs, "batch_rollout.gif", fps=5)
