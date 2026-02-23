@@ -7,6 +7,12 @@ from hydra.utils import instantiate
 
 from src.data_module.dataset import DiffusionTrackerDataset
 
+import jax.numpy as jnp
+from jax import tree_util
+
+def waymax_collate(states):
+    return tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *states)
+
 
 def collate_fn(batch):
 
@@ -35,7 +41,7 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         self.train_ds_cfg = train_ds_cfg
         self.val_ds_cfg = val_ds_cfg
         self.test_ds_cfg = test_ds_cfg
-        self.train_dl_cfg = train_ds_cfg
+        self.train_dl_cfg = train_dl_cfg
         self.val_dl_cfg = val_dl_cfg
         self.test_dl_cfg = test_dl_cfg
 
@@ -53,7 +59,7 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
     def train_dataloader(self):
         return instantiate(
             self.train_dl_cfg,
-            collate_fn=collate_fn,
+            collate_fn=waymax_collate,
             dataset=self.train_dataset,
         )
 

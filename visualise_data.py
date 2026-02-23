@@ -1,10 +1,9 @@
 import warnings
 
-import google
 import hydra
 from hydra.utils import instantiate
 
-from src.data_module import DiffusionTrackerDataModule  # , visualize_data
+from src.data_module import DiffusionTrackerDataModule, visualize
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -19,12 +18,9 @@ def main(config):
     Args:
         config (DictConfig): hydra experiment config.
     """
-    gcloud_token = config.gcloud_token
-    if gcloud_token is not None:
-        google.auth.default()
     data_module = DiffusionTrackerDataModule(**config.data_module)
     data_module.setup("fit")
-    # visualize_data(data_module.train_dataloader())
+    visualize.visualize(data_module.train_dataloader(), config.model, config.viz)
 
 
 if __name__ == "__main__":
