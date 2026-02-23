@@ -3,16 +3,17 @@ import math
 
 import jax
 import jax.numpy as jnp
-from jax import tree_util
 import numpy as np
-from PIL import Image
 from hydra.utils import instantiate
-
+from jax import tree_util
+from PIL import Image
 from waymax import config as _config
-from waymax import datatypes, dynamics, visualization
+from waymax import datatypes, dynamics
 from waymax import env as _env
+from waymax import visualization
 
-import src.metrics as metrics
+from src.metrics import average_episode_summaries, summarize_episode_metrics
+
 
 def grid_frame(images, cols=None):
     """images: list of HxWx3 arrays → one grid image"""
@@ -29,6 +30,7 @@ def grid_frame(images, cols=None):
         r, c = divmod(i, cols)
         canvas.paste(im, (c * w, r * h))
     return canvas
+
 
 def save_grid_gif(imgs, path="batch.gif", fps=5):
     """
@@ -53,12 +55,14 @@ def save_grid_gif(imgs, path="batch.gif", fps=5):
         loop=0,
     )
 
+
 def take_batch_item(state, b: int):
     return tree_util.tree_map(lambda x: x[b], state)
 
+
 def rollout_one(env, ego_actor, init_state, render_every=5):
     """Roll out a single (unbatched) scenario. Returns (states, metrics_t, imgs)."""
-    met_fn  = jax.jit(env.metrics)
+    met_fn = jax.jit(env.metrics)
     jit_step = jax.jit(env.step)
     jit_select_action = jax.jit(ego_actor.select_action)
 
@@ -78,11 +82,14 @@ def rollout_one(env, ego_actor, init_state, render_every=5):
 
         # render every N steps
         if (t % render_every) == 0:
-            imgs.append(visualization.plot_simulator_state(next_state, use_log_traj=False))
+            imgs.append(
+                visualization.plot_simulator_state(next_state, use_log_traj=False)
+            )
 
         t += 1
 
     return states, metrics_t, imgs
+
 
 def visualize_batch_rollouts(config, env, dynamics_model, dataloader, render_every=5):
     ego_actor = instantiate(
@@ -92,8 +99,8 @@ def visualize_batch_rollouts(config, env, dynamics_model, dataloader, render_eve
     )
 
     # get one batch
-    state0 = next(iter(dataloader))          
-    B = int(state0.timestep.shape[0])       
+    state0 = next(iter(dataloader))
+    B = int(state0.timestep.shape[0])
 
     all_imgs = []
     all_metrics = []
@@ -115,30 +122,35 @@ def visualize_batch_rollouts(config, env, dynamics_model, dataloader, render_eve
 
     return all_states, all_metrics, all_imgs
 
-def visualize(dataloader, config, config_viz):
+
+def visualize_data(dataloader, config, config_viz):
     dynamics_model = dynamics.StateDynamics()
     env = _env.BaseEnvironment(
-    dynamics_model=dynamics_model,
-    config=dataclasses.replace(
-        _config.EnvironmentConfig(),
-        max_num_objects=config_viz.max_num_objects,
-        controlled_object=_config.ObjectType.SDC,
-        sim_agents=None,
-    ),
-)
-    all_states, all_metrics, all_imgs = visualize_batch_rollouts(config, env, dynamics_model, dataloader, render_every=config_viz.render_every)
+        dynamics_model=dynamics_model,
+        config=dataclasses.replace(
+            _config.EnvironmentConfig(),
+            max_num_objects=config_viz.max_num_objects,
+            controlled_object=_config.ObjectType.SDC,
+            sim_agents=None,
+        ),
+    )
+    all_states, all_metrics, all_imgs = visualize_batch_rollouts(
+        config, env, dynamics_model, dataloader, render_every=config_viz.render_every
+    )
 
     episode_summaries = []
     B = len(all_states)
     for b in range(B):
         ego_mask = all_states[b][0].object_metadata.is_sdc
-        episode_summaries.append(metrics.summarize_episode_metrics(all_metrics[b], ego_mask=ego_mask))
+        episode_summaries.append(
+            summarize_episode_metrics(all_metrics[b], ego_mask=ego_mask)
+        )
 
-    avg_metrics = metrics.average_episode_summaries(episode_summaries)
+    avg_metrics = average_episode_summaries(episode_summaries)
 
     print(avg_metrics)
     with open(config_viz.metrics_path, "w") as f:
         for k, v in sorted(avg_metrics.items()):
-            f.write(f"{k}: {v}\n")
+            print(f"{k}: {v}\n")
     print(f"Saved metrics → {config_viz.metrics_path}")
     save_grid_gif(all_imgs, "batch_rollout.gif", fps=5)
