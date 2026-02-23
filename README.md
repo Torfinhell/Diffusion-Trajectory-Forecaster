@@ -10,14 +10,12 @@ pip install uv
 uv sync
 ```
 To authenticate to google account for data downloading(one time):
-```
-sudo apt-get update
-sudo apt-get install -y apt-transport-https ca-certificates gnupg
-echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
-curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo tee /usr/share/keyrings/cloud.google.gpg
-gcloud auth login
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
-```
+
+1. Apply for [Waymo Open Dataset](https://waymo.com/open) access.
+2. Install [gcloud CLI](https://cloud.google.com/sdk/docs/install)
+3. Run ```gcloud auth login <your_email>``` with the same email used for step 1.
+4. Run ```gcloud auth application-default login```.
+
 ### Data predownload
 If you want to download specific path from waymax (Motion)[https://waymo.com/open/download/] dataset run:
 ```
@@ -38,3 +36,24 @@ uv run visualise_data.py
 ```
 
 ### Metrics used
+####  Overlap (Collision Rate)
+
+Shows fraction of time during which ego vehicle’s bounding box overlaps with any other object.
+
+#### Offroad Rate
+
+Shows fraction of time during which the ego vehicle leaves the drivable road area.
+
+#### Log Divergence (ADE)
+
+Log divergence measures how far the simulated trajectory deviates from the logged (ground-truth) trajectory over time.
+
+### Example
+
+![Rollout](batch_rollout.gif)
+
+#### log_divergence: 60.71818017959595
+
+#### offroad: 0.25
+
+#### overlap: 0.75
