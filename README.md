@@ -48,6 +48,11 @@ Shows fraction of time during which the ego vehicle leaves the drivable road are
 
 Log divergence measures how far the simulated trajectory deviates from the logged (ground-truth) trajectory over time.
 
+#### Collision
+
+A binary metric identifying if collisions happen between agents.
+
+
 ### Example
 
 ![Rollout](media/batch_rollout.gif)
