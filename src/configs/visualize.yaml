@@ -7,3 +7,4 @@ defaults:
 viz:
   max_num_objects: 32
   render_every: 2
+  save_gif: media/batch_rollout.gif

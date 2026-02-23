@@ -149,4 +149,4 @@ def visualize_data(dataloader, config, config_viz):
     avg_metrics = average_episode_summaries(episode_summaries)
     for k, v in sorted(avg_metrics.items()):
         print(f"{k}: {v}")
-    save_grid_gif(all_imgs, "batch_rollout.gif", fps=5)
+    save_grid_gif(all_imgs, config_viz.save_gif, fps=5)
