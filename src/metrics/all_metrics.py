@@ -1,10 +1,12 @@
 import jax.numpy as jnp
 
+
 def stack_metric(metrics_t, name):
     """metrics_t: list[dict[str, MetricResult]] -> (vals[T,...], valid[T,...])"""
     vals = jnp.stack([m[name].value for m in metrics_t], axis=0)
     valid = jnp.stack([m[name].valid for m in metrics_t], axis=0)
     return vals, valid
+
 
 def mean_over_valid(vals, valid):
     vals = vals.astype(jnp.float32)
@@ -12,14 +14,17 @@ def mean_over_valid(vals, valid):
     denom = jnp.maximum(1.0, jnp.sum(valid))
     return jnp.sum(vals * valid) / denom
 
+
 def any_over_time(vals, valid):
     vals = vals.astype(jnp.float32)
     return jnp.any((vals > 0) & valid)
+
 
 def rate_over_valid(vals, valid):
     vals = vals.astype(jnp.float32)
     denom = jnp.maximum(1.0, jnp.sum(valid))
     return jnp.sum(((vals > 0) & valid).astype(jnp.float32)) / denom
+
 
 def summarize_episode_metrics(metrics_t, ego_mask=None):
     """
@@ -37,7 +42,7 @@ def summarize_episode_metrics(metrics_t, ego_mask=None):
         if name not in metrics_t[0]:
             continue
 
-        vals, valid = stack_metric(metrics_t, name)  # [T, N] 
+        vals, valid = stack_metric(metrics_t, name)  # [T, N]
 
         if ego_mask is not None:
             vals = vals[:, ego_mask]
@@ -51,6 +56,7 @@ def summarize_episode_metrics(metrics_t, ego_mask=None):
             out[name] = float(rate_over_valid(vals, valid))
 
     return out
+
 
 def average_episode_summaries(episode_summaries):
     """

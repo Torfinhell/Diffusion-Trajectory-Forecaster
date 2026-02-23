@@ -1,9 +1,8 @@
 import warnings
 
 import hydra
-from hydra.utils import instantiate
 
-from src.data_module import DiffusionTrackerDataModule, visualize
+from src.data_module import DiffusionTrackerDataModule, visualize_data
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -20,7 +19,7 @@ def main(config):
     """
     data_module = DiffusionTrackerDataModule(**config.data_module)
     data_module.setup("fit")
-    visualize.visualize(data_module.train_dataloader(), config.model, config.viz)
+    visualize_data(data_module.train_dataloader(), config.model, config.viz)
 
 
 if __name__ == "__main__":
