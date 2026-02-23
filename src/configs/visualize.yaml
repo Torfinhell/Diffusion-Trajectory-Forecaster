@@ -1,6 +1,10 @@
 defaults:
-  - model: null #TODO visualize multiple models simultaneously
+  - model: const
   - data_module: visualize
   - transforms: null
   - _self_
-gcloud_token: null
+
+viz:
+  max_num_objects: 32
+  render_every: 2
+  metrics_path: metrics.txt

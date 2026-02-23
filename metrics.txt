@@ -1,0 +1,3 @@
+log_divergence: 60.71818017959595
+offroad: 0.25
+overlap: 0.75
