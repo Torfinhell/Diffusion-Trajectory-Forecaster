@@ -1,0 +1,16 @@
+defaults:
+  - model: const
+  - data_module: visualize
+  - transforms: null
+  - logger: wandb
+  - _self_
+logger:
+  logging: False
+  print_hparams: True
+  project: "ddpm_baseline"
+trainer:
+  num_epochs: 10
+  train_epoch_len: 100
+  val_epoch_len: 10
+  gradient_clip_val: 6.0
+  log_every_n_steps: 10

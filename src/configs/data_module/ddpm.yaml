@@ -1,0 +1,12 @@
+defaults:
+  - datasets: example
+  - dataloaders: example
+  - _self_
+
+train_ds_cfg: ${data_module.datasets.train}
+val_ds_cfg: null
+test_ds_cfg: null
+
+train_dl_cfg: ${data_module.dataloaders.train}
+val_dl_cfg: null
+test_dl_cfg: null
