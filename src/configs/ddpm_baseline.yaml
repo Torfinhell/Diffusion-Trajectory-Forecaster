@@ -14,8 +14,9 @@ trainer:
   val_epoch_len: 10
   gradient_clip_val: 6.0
   log_every_n_steps: 10
-metrics:
+  seed: 1
   enabled: True
-  val_batches: 4          # how many validation batches to use for metrics
+  val_batches: 4
   samples_per_scene: 1
-  names: ["ade", "fde"]
+
+logging: "offline"

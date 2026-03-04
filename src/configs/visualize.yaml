@@ -2,8 +2,9 @@ defaults:
   - model: const
   - data_module: visualize
   - transforms: null
+  - metrics: null
   - _self_
-
+logging: "offline"
 viz:
   max_num_objects: 32
   render_every: 2

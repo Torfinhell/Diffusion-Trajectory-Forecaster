@@ -28,5 +28,5 @@ def main(cfg: DictConfig) -> None:
         limit_val_batches=hparams.trainer.val_epoch_len,
         reload_dataloaders_every_n_epochs=cfg.datamodule_cfg.generate_every_epoch,
     )
-    diff_model = DiffusionModel(hparams.model)
+    diff_model = DiffusionModel(hparams.model, seed=hparams.trainer.seed)
     trainer.fit(diff_model, dm)

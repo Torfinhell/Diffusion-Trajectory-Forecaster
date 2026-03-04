@@ -1,0 +1,5 @@
+
+  - _target_: src.metrics.AdeMetric
+    name: ADE
+  - _target_: src.metrics.FdeMetric
+    name: FDE
