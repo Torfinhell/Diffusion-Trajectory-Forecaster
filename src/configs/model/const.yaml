@@ -1,2 +1,3 @@
 _target_: waymax.agents.create_constant_speed_actor
 speed: 27.0
+metrics: ${metrics}

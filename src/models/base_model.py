@@ -11,7 +11,7 @@ import lightning as L
 import matplotlib.pyplot as plt
 import torch
 import wandb
-
+from metrics.base import MetricsManager, build_metrics
 
 class BaseDiffusionModel(L.LightningModule):
     def __init__(self, **kwargs):
@@ -34,6 +34,17 @@ class BaseDiffusionModel(L.LightningModule):
 
         self.global_step_ = 0
 
+        self.metrics_cfg = kwargs["metrics"]
+        if self.metrics_cfg is not None and self.metrics_cfg.enabled:
+            self.val_metric_batches = self.metrics_cfg.val_batches
+            self.samples_per_scene = self.metrics_cfg.samples_per_scene
+            self.metrics = MetricsManager(build_metrics(self.metrics_cfg.names))
+            self._val_batches_for_metrics = []
+        else:
+            self.metrics = None
+            self.val_metric_batches = 0
+
+
         self.configure_optimizers()
 
     def get_model(self):
@@ -55,7 +66,7 @@ class BaseDiffusionModel(L.LightningModule):
         raise NotImplementedError(
             "Should not use base class. Should implement batch_loss_fn for child class"
         )
-
+    
     def on_fit_start(self) -> None:
         pathlib.Path("checkpoints").mkdir(exist_ok=True)
 
@@ -138,12 +149,32 @@ class BaseDiffusionModel(L.LightningModule):
         )
         # dict_ = {"loss": torch.scalar_tensor(value.item())}
         self.log("Val_Loss", jnp.asarray(value).item(), prog_bar=True, batch_size=1)
+        #collect some first batches to compute metrics on
+        if self.metrics is not None and len(self._val_batches_for_metrics) < self.val_metric_batches:
+            self._val_batches_for_metrics.append(batch)
 
     def on_validation_epoch_end(self) -> None:
         # pathlib.Path.mkdir(f"checkpoints/ScoreBased", parents=True, exist_ok=True)
         # eqx.tree_serialise_leaves(f"checkpoints/ScoreBased/last.eqx", self.model)
-        # TODO Logging
-        pass
+        if self.metrics is None:
+            return
+
+        self.metrics.reset()
+        for batch in self._val_batches_for_metrics:
+            #Assuming batch = {"gt_xy": gt_xy, "gt_valid": gt_valid, ...}
+            gt_xy = batch["gt_xy"]              
+            valid = batch.get("gt_valid", None) 
+
+            self.sample_key, k = jr.split(self.sample_key)
+            pred_xy = self.sample_trajectory(batch, k)  # must match gt shape
+
+            self.metrics.update(pred_xy, gt_xy, valid)
+
+        vals = self.metrics.compute()
+        log_dict = {f"{self.metrics_prefix}/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
+        self.log_dict(log_dict, prog_bar=True)
+      
+        self._val_batches_for_metrics.clear()
 
     @staticmethod
     @eqx.filter_jit
