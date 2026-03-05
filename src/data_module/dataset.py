@@ -25,7 +25,7 @@ class DiffusionTrackerDataset(Dataset):
             waymax_config = getattr(config, waymax_conf_version)
             waymax_config = dataclasses.replace(
                 waymax_config,
-                path=f"{gs_path}00000",
+                path=f"{gs_path}1000",
                 max_num_objects=max_num_objects,
             )
             self.__class__.GLOBAL_ITER = dataloader.simulator_state_generator(
@@ -49,7 +49,7 @@ class DiffusionTrackerDataset(Dataset):
                     print(
                         f"Iteration through states finished with exception {e} \n"
                         f"at ind: {ind}, and max number of states: {num_states} \n"
-                        f"gs_path is {gs_path}00000"
+                        f"gs_path is {gs_path}1000"
                     )
                     break
             if download_path is not None:
