@@ -57,7 +57,7 @@ class BaseDiffusionModel(L.LightningModule):
     def on_fit_start(self) -> None:
         pathlib.Path("checkpoints").mkdir(exist_ok=True)
 
-        if self.hparams.load_last_checkpoint:
+        if self.hparams.trainer.load_last_checkpoint:
             try:
                 self.model = eqx.tree_deserialise_leaves(
                     f"checkpoints/ScoreBased/last.eqx", self.model

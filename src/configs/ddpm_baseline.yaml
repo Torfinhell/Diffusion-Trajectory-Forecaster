@@ -19,3 +19,4 @@ trainer:
   generate_every_epoch: 1
   print_hparams: True
   logging: "offline"
+  load_last_checkpoint: False
