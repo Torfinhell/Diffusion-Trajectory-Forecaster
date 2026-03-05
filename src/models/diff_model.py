@@ -10,8 +10,8 @@ from .base_model import BaseDiffusionModel
 
 
 class DiffusionModel(BaseDiffusionModel):
-    def __init__(self, cfg):
-        super().__init__(cfg)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def get_model(self):
         """

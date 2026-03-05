@@ -15,11 +15,11 @@ from hydra.utils import instantiate
 
 
 class BaseDiffusionModel(L.LightningModule):
-    def __init__(self, cfg, **kwargs):
+    def __init__(self, seed, cfg_metrics, **kwargs):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
-        self.key = jax.random.PRNGKey(cfg.trainer.seed)
+        self.key = jax.random.PRNGKey(seed)
         self.key, self.model_key, self.train_key, self.loader_key, self.sample_key = (
             jax.random.split(self.key, 5)
         )
@@ -31,14 +31,8 @@ class BaseDiffusionModel(L.LightningModule):
         self.weight = lambda t: 1 - jnp.exp(-self.int_beta(t))
         self.dt0 = 0.1
         self.samples = 10
-
         self.global_step_ = 0
-
-        self.metrics_cfg = kwargs["metrics"]
-        metrics = {}
-        for metric in cfg.metrics:
-            metrics[metric.name] = instantiate(metric)
-
+        self.metrics = cfg_metrics
         self.configure_optimizers()
 
     def get_model(self):
