@@ -60,6 +60,7 @@ class DiffusionTrackerDataset(Dataset):
             if download_path is not None:
                 with open(download_path / "states.pickle", "wb") as file:
                     pickle.dump(self.states, file)
+                print(f"Downloaded states to {download_path}")
 
     def __getitem__(self, key):
         return self.states[key]

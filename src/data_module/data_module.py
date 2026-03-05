@@ -6,8 +6,10 @@ from jax.tree_util import tree_map
 from torch.utils.data import default_collate
 
 
-def numpy_collate(batch):
-    return tree_map(np.asarray, default_collate(batch))
+# def numpy_collate(batch):
+#     return tree_map(np.asarray, default_collate(batch))
+def waymax_collate(states):
+    return tree_map(lambda *xs: jnp.stack(xs, axis=0), *states)
 
 
 class DiffusionTrackerDataModule(L.LightningDataModule):
@@ -30,20 +32,20 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
             self.train_dataset = instantiate(self.cfg_ds.val)
         return instantiate(
             self.cfg_dl.train,
-            collate_fn=numpy_collate,
+            collate_fn=waymax_collate,
             dataset=self.train_dataset,
         )
 
     def val_dataloader(self):
         return instantiate(
             self.cfg_dl.val,
-            collate_fn=numpy_collate,
+            collate_fn=waymax_collate,
             dataset=self.val_dataset,
         )
 
     def test_dataloader(self):
         return instantiate(
             self.cfg_dl.test,
-            collate_fn=numpy_collate,
+            collate_fn=waymax_collate,
             dataset=self.test_dataset,
         )
