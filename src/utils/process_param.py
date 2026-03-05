@@ -5,7 +5,7 @@ from omegaconf import OmegaConf
 
 
 def process_hparams(hparams, print_hparams=True):
-    if hparams.logging == "online":
+    if hparams.trainer.logging == "online":
         hparams.show = False
 
     """Create HParam ID for saving and loading checkpoints"""
