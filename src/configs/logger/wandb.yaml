@@ -1,8 +1,6 @@
 _target_: pytorch_lightning.loggers.WandbLogger
 project: "ddpm_baseline"
+save_dir: "wandb"
 entity: null
 name: "testing"
 mode: ${trainer.logging}
-loss_names: []
-log_checkpoints: False
-id_length: 8
