@@ -1,6 +1,6 @@
 import jax.numpy as jnp
-import lightning as L
 import numpy as np
+import pytorch_lightning as L
 from hydra.utils import instantiate
 from jax.tree_util import tree_map
 from torch.utils.data import default_collate
