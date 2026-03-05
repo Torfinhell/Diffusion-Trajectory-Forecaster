@@ -17,4 +17,5 @@ trainer:
   val_batches: 4
   samples_per_scene: 1
   generate_every_epoch: 1
-logging: "offline"
+  print_hparams: True
+  logging: "offline"
