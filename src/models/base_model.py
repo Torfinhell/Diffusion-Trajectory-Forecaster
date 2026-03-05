@@ -7,8 +7,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import lightning as L
 import matplotlib.pyplot as plt
+import pytorch_lightning as L
 import torch
 import wandb
 from hydra.utils import instantiate
