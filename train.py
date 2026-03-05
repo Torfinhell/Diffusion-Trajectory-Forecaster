@@ -21,13 +21,16 @@ def main(cfg) -> None:
         logger=logger,
         callbacks=[],
         log_every_n_steps=hparams.trainer.log_every_n_steps,
-        gradient_clip_val=hparams.trainer.gradient_clip_val,
         enable_progress_bar=True,
         limit_train_batches=hparams.trainer.train_epoch_len,
         limit_val_batches=hparams.trainer.val_epoch_len,
         reload_dataloaders_every_n_epochs=cfg.trainer.generate_every_epoch,
     )
-    diff_model = instantiate(hparams.model, cfg_metrics=hparams.metrics)
+    diff_model = instantiate(
+        hparams.model,
+        cfg_metrics=hparams.metrics,
+        grad_clip=hparams.trainer.gradient_clip_val,
+    )
     trainer.fit(diff_model, dm)
 
 
