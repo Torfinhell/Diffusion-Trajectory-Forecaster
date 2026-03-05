@@ -15,7 +15,7 @@ from hydra.utils import instantiate
 
 
 class BaseDiffusionModel(L.LightningModule):
-    def __init__(self, seed, cfg_metrics, grad_clip, **kwargs):
+    def __init__(self, cfg, seed, cfg_metrics, grad_clip, **kwargs):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
@@ -57,7 +57,7 @@ class BaseDiffusionModel(L.LightningModule):
     def on_fit_start(self) -> None:
         pathlib.Path("checkpoints").mkdir(exist_ok=True)
         print(self.hparams)
-        if self.hparams.trainer.load_last_checkpoint:
+        if self.hparams.load_last_checkpoint:
             try:
                 self.model = eqx.tree_deserialise_leaves(
                     f"checkpoints/ScoreBased/last.eqx", self.model
