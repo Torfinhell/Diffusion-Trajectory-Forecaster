@@ -1,4 +1,9 @@
-
+train:
+  - _target_: src.metrics.AdeMetric
+    name: ADE
+  - _target_: src.metrics.FdeMetric
+    name: FDE
+val:
   - _target_: src.metrics.AdeMetric
     name: ADE
   - _target_: src.metrics.FdeMetric

@@ -1,13 +1,11 @@
 defaults:
-  - model: const
-  - data_module: visualize
+  - model: diffusion_model
+  - dataloaders: basic
+  - datasets: basic
   - transforms: null
   - logger: wandb
+  - metrics: all_metrics
   - _self_
-logger:
-  logging: False
-  print_hparams: True
-  project: "ddpm_baseline"
 trainer:
   num_epochs: 10
   train_epoch_len: 100
@@ -18,5 +16,5 @@ trainer:
   enabled: True
   val_batches: 4
   samples_per_scene: 1
-
+  generate_every_epoch: 1
 logging: "offline"

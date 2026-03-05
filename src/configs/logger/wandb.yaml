@@ -1,0 +1,4 @@
+_target_: pytorch_lightning.loggers.WandbLogger
+logging: False
+print_hparams: True
+project: "ddpm_baseline"

@@ -5,46 +5,45 @@ from hydra.utils import instantiate
 from jax.tree_util import tree_map
 from torch.utils.data import default_collate
 
-from src.data_module.dataset import DiffusionTrackerDataset
-
 
 def numpy_collate(batch):
     return tree_map(np.asarray, default_collate(batch))
 
 
 class DiffusionTrackerDataModule(L.LightningDataModule):
-    def __init__(self, cfg_data_module, **kwargs):
+    def __init__(self, cfg_ds, cfg_dl, **kwargs):
         super().__init__()
-        self.cfg_data_module = cfg_data_module
+        self.cfg_ds = cfg_ds
+        self.cfg_dl = cfg_dl
 
     def setup(self, stage):
         if stage == "fit":
-            if self.cfg_data_module.train_ds_cfg is not None:
-                self.train_dataset = instantiate(self.cfg_data_module.train_ds_cfg)
-            if self.cfg_data_module.val_ds_cfg is not None:
-                self.val_dataset = instantiate(self.cfg_data_module.val_ds_cfg)
-            if self.cfg_data_module.test_ds_cfg is not None:
-                self.test_dataset = instantiate(self.cfg_data_module.test_ds_cfg)
+            if getattr(self.cfg_ds, "val", None) is not None:
+                self.val_dataset = instantiate(self.cfg_ds.val)
+            if getattr(self.cfg_ds, "test", None) is not None:
+                self.test_dataset = instantiate(self.cfg_ds.test)
         else:
             raise NotImplementedError("Didnt implement not fit stage")
 
     def train_dataloader(self):
+        if getattr(self.cfg_ds, "val", None) is not None:
+            self.train_dataset = instantiate(self.cfg_ds.val)
         return instantiate(
-            self.cfg_data_module.train_dl_cfg,
+            self.cfg_dl.train,
             collate_fn=numpy_collate,
             dataset=self.train_dataset,
         )
 
     def val_dataloader(self):
         return instantiate(
-            self.cfg_data_module.val_dl_cfg,
+            self.cfg_dl.val,
             collate_fn=numpy_collate,
             dataset=self.val_dataset,
         )
 
     def test_dataloader(self):
         return instantiate(
-            self.cfg_data_module.test_dl_cfg,
+            self.cfg_dl.test,
             collate_fn=numpy_collate,
             dataset=self.test_dataset,
         )
