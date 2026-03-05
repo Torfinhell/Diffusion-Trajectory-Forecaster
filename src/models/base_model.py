@@ -15,7 +15,7 @@ from hydra.utils import instantiate
 
 
 class BaseDiffusionModel(L.LightningModule):
-    def __init__(self, seed, cfg_metrics, **kwargs):
+    def __init__(self, seed, cfg_metrics, grad_clip, **kwargs):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
@@ -23,7 +23,6 @@ class BaseDiffusionModel(L.LightningModule):
         self.key, self.model_key, self.train_key, self.loader_key, self.sample_key = (
             jax.random.split(self.key, 5)
         )
-
         self.key, subkey = jax.random.split(self.key)
         self.model = self.get_model()
         self.t1 = 10.0
