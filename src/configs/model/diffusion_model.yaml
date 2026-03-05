@@ -1,2 +1,3 @@
 _target_: src.models.DiffusionModel
 seed: ${trainer.seed}
+load_last_checkpoint: ${trainer.load_last_checkpoint}
