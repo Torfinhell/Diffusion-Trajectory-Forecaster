@@ -1,0 +1,21 @@
+enabled: true
+
+# passed to your plot_simulator_state(...)
+use_log_traj: true
+highlight_obj: SDC
+plot_all_trajectories: true
+
+pred_alpha: 0.8
+pred_linewidth: 2.0
+pred_linestyle: "-"
+pred_clip_to_view: true
+gt_linewidth: 2.0
+
+# passed into Waymax VizConfig(**viz_config)
+viz_config:
+  show_agent_id: false
+  center_agent_idx: -1
+  back_x: 75
+  front_x: 75
+  back_y: 75
+  front_y: 75

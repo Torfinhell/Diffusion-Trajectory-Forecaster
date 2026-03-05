@@ -5,6 +5,7 @@ defaults:
   - transforms: null
   - logger: wandb
   - metrics: all_metrics
+  - viz: default
   - _self_
 trainer:
   num_epochs: 10

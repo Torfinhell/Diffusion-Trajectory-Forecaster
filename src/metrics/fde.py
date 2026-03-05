@@ -23,15 +23,15 @@ class FdeMetric(BaseMetric):
             count=jnp.array(0.0, jnp.float32),
         )
 
-    def compute(state: FDEState, eps: float = 1e-8) -> jnp.ndarray:
-        return state.sum_error / (state.count + eps)
+    def compute(self, eps: float = 1e-8) -> jnp.ndarray:
+        return self.state.sum_error / (self.state.count + eps)
 
     def update(
-        state: FDEState,
+        self,
         pred_xy: jnp.ndarray,
         gt_xy: jnp.ndarray,
         valid: jnp.ndarray | None,
-    ) -> FDEState:
+    ) -> None:
         """
         FDE (Final Displacement Error)
 
@@ -54,7 +54,5 @@ class FdeMetric(BaseMetric):
             batch_sum = jnp.sum(dist)
             batch_cnt = jnp.array(dist.size, jnp.float32)
 
-        return FDEState(
-            sum_error=state.sum_error + batch_sum,
-            count=state.count + batch_cnt,
-        )
+        self.state.sum_error += batch_sum
+        self.state.count += batch_cnt

@@ -22,15 +22,15 @@ class AdeMetric(BaseMetric):
             sum_error=jnp.array(0.0, jnp.float32), count=jnp.array(0.0, jnp.float32)
         )
 
-    def compute(state: ADEState, eps: float = 1e-8) -> jnp.ndarray:
-        return state.sum_error / (state.count + eps)
+    def compute(self, eps: float = 1e-8) -> jnp.ndarray:
+        return self.state.sum_error / (self.state.count + eps)
 
     def update(
-        state: ADEState,
+        self,
         pred_xy: jnp.ndarray,
         gt_xy: jnp.ndarray,
         valid: jnp.ndarray | None,
-    ) -> ADEState:
+    ) -> None:
         # pred_xy, gt_xy: (..., T, 2)
         diff = pred_xy - gt_xy
         dist = jnp.sqrt(jnp.sum(diff * diff, axis=-1))  # (..., T)
@@ -43,3 +43,6 @@ class AdeMetric(BaseMetric):
             valid_f = valid.astype(jnp.float32)  # (..., T)
             batch_sum = jnp.sum(dist * valid_f)
             batch_cnt = jnp.sum(valid_f)
+
+        self.state.sum_error += batch_sum
+        self.state.count += batch_cnt
