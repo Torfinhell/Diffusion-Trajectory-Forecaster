@@ -15,7 +15,7 @@ from hydra.utils import instantiate
 
 
 class BaseDiffusionModel(L.LightningModule):
-    def __init__(self, cfg, seed, cfg_metrics, grad_clip, **kwargs):
+    def __init__(self, seed, cfg_metrics, grad_clip, **kwargs):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
