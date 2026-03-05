@@ -4,7 +4,6 @@ train:
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@"
   num_states: 100
   max_num_objects: 32
-  start_ind: 200
   # download_path: "data/train"
   download_path: null
 val:
@@ -13,7 +12,6 @@ val:
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@"
   num_states: 100
   max_num_objects: 32
-  start_ind: 0
   # download_path: "data/val"
   download_path: null
 test:
@@ -22,6 +20,5 @@ test:
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@"
   num_states: 100
   max_num_objects: 32
-  start_ind: 100
   # download_path: "data/test"
   download_path: null
