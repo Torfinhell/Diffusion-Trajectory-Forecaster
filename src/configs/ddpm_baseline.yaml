@@ -2,6 +2,7 @@ defaults:
   - model: diffusion_model
   - dataloaders: basic
   - datasets: basic
+  - transforms: null
   - logger: wandb
   - metrics: all_metrics
   - visual: default
