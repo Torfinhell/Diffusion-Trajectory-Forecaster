@@ -40,7 +40,7 @@ class DiffusionTrackerDataset(Dataset):
         self.data = []
         if download_folder is not None:
             download_folder = Path(download_folder)
-            if "train" in download_folder:
+            if "train" in str(download_folder):
                 download_path = (
                     download_folder / f"states_{self.__class__.TRAIN_DIR}.pkl"
                 )
@@ -49,7 +49,7 @@ class DiffusionTrackerDataset(Dataset):
                 download_path = download_folder / "states.pkl"
         if download_folder is not None and download_path.exists():
             with open(download_path, "rb") as file:
-                pickle.load(self.data, file)
+                self.data = pickle.load(file)
             print(f"Downloaded states from {download_path}")
         else:
             for ind in tqdm(
