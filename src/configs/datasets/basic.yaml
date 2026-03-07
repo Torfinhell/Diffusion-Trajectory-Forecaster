@@ -2,23 +2,21 @@ train:
   _target_: src.data_module.dataset.DiffusionTrackerDataset
   waymax_conf_version: WOD_1_3_1_TRAINING
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@"
-  num_states: 100
+  num_states: 10
   max_num_objects: 32
   # download_path: "data/train"
-  download_path: null
+  download_path: "data/train"
 val:
   _target_: src.data_module.dataset.DiffusionTrackerDataset
   waymax_conf_version: WOD_1_3_1_TRAINING
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@"
-  num_states: 100
+  num_states: 10
   max_num_objects: 32
-  # download_path: "data/val"
-  download_path: null
+  download_path: "data/val"
 test:
   _target_: src.data_module.dataset.DiffusionTrackerDataset
   waymax_conf_version: WOD_1_3_1_TRAINING
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@"
-  num_states: 100
+  num_states: 10
   max_num_objects: 32
-  # download_path: "data/test"
-  download_path: null
+  download_path: "data/test"

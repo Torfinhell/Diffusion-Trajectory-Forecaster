@@ -5,19 +5,52 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import optax
+from hydra.utils import instantiate
 
 from .base_model import BaseDiffusionModel
 
 
 class DiffusionModel(BaseDiffusionModel):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self,**kwargs,):
+        super().__init__(**kwargs,)
+
+    
+    def get_data(self, batch, t):
+        traj = batch.log_trajectory
+
+        # past trajectory (context)
+        past_xy = jnp.stack(
+            [traj.x[..., :t], traj.y[..., :t]],
+            axis=-1,
+        )  # [B, N, T_hist, 2]
+
+        # future trajectory (target for diffusion)
+        future_xy = jnp.stack(
+            [traj.x[..., t:],
+            traj.y[..., t:]],
+            axis=-1,
+        )  # [B, N, H, 2]
+
+        # mask for valid objects
+        valid = traj.valid[..., t:]  # [B, N, H]
+
+        return {
+            "traj": future_xy,
+            "context": past_xy,
+            "mask": valid,
+        }
+
+
 
     def get_model(self):
-        """
-        Get FCOS model from torchvision configured for bounding box predictions.
-        Returns a FCOS ResNet50 FPN model with pretrained backbone for custom number of classes.
-        """
+        future_steps = self.cfg_model.args.traj_len - self.history
+        return instantiate(
+            self.cfg_model.model,
+            out_dim=2 * future_steps,
+            hid_dim=self.cfg_model.args.hid_dim,
+            history=self.history,
+            key=self.model_key,
+        )
 
     def configure_optimizers(self):
         self.optim = optax.adam(3e-4)
@@ -38,19 +71,41 @@ class DiffusionModel(BaseDiffusionModel):
         :param key:
         :return:
         """
-        mean = data * jnp.exp(-0.5 * int_beta(t))  # analytical mean of OU process
-        var = jnp.maximum(
-            1 - jnp.exp(-int_beta(t)), 1e-5
-        )  # analytical variance of OU process
+        traj = data["traj"]
+        context = data["context"]
+        mask = data.get("mask", None)
+
+        N = traj.shape[0]
+
+        # flatten per agent
+        traj = traj.reshape(N, -1)         # [N, H*2]
+        context = context.reshape(N, -1)   # [N, T*2]
+
+        mean = traj * jnp.exp(-0.5 * int_beta(t))
+        var = jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5)
         std = jnp.sqrt(var)
-        noise = jr.normal(key, data.shape)
-        y = mean + std * noise
-        pred = model(t, y)
-        return weight(t) * jnp.mean((pred + noise / std) ** 2)  # loss
+
+        key_agents = jr.split(key, N)
+        noise = jax.vmap(lambda k: jr.normal(k, (traj.shape[1],)))(key_agents)   # [N, H*2]
+        y = mean + std * noise                                                    # [N, H*2]
+
+        # shared model applied per agent
+        pred = jax.vmap(lambda y_i, c_i: model(t, y_i, c_i))(y, context)          # [N, H*2]
+
+        err = (pred + noise / std) ** 2
+
+        if mask is not None:
+            mask = jnp.repeat(mask[..., None], 2, axis=-1)   # [N, H, 2]
+            mask = mask.reshape(N, -1).astype(err.dtype)     # [N, H*2]
+            loss = (err * mask).sum() / jnp.maximum(mask.sum(), 1.0)
+        else:
+            loss = jnp.mean(err)
+
+        return weight(t) * loss
 
     @staticmethod
     def batch_loss_fn(model, weight, int_beta, data, t1, key):
-        batch_size = data.shape[0]
+        batch_size = data["traj"].shape[0]
         tkey, losskey = jr.split(key)
         losskey = jr.split(losskey, batch_size)
         """
@@ -61,6 +116,6 @@ class DiffusionModel(BaseDiffusionModel):
         t = jr.uniform(tkey, (batch_size,), minval=0, maxval=t1 / batch_size)
         t = t + (t1 / batch_size) * jnp.arange(batch_size)
         """ Fixing the first three arguments of single_loss_fn, leaving data, t and key as input """
-        loss_fn = partial(BaseDiffusionModel.single_loss_fn, model, weight, int_beta)
+        loss_fn = partial(DiffusionModel.single_loss_fn, model, weight, int_beta)
         loss_fn = jax.vmap(loss_fn)
         return jnp.mean(loss_fn(data, t, losskey))

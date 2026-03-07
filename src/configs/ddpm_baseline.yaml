@@ -5,7 +5,8 @@ defaults:
   - transforms: null
   - logger: wandb
   - metrics: all_metrics
-  - viz: default
+  - visual: default
+  - architectures: TinyDenoiser
   - _self_
 trainer:
   num_epochs: 10
@@ -19,5 +20,5 @@ trainer:
   samples_per_scene: 1
   generate_every_epoch: 1
   print_hparams: True
-  logging: "offline"
+  logging: "online"
   load_last_checkpoint: False

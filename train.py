@@ -16,7 +16,7 @@ def main(cfg) -> None:
     dm = DiffusionTrackerDataModule(hparams.datasets, hparams.dataloaders)
     dm.setup("fit")
     trainer = Trainer(
-        accelerator="gpu",
+        accelerator="auto",
         max_epochs=hparams.trainer.num_epochs,
         logger=logger,
         callbacks=[],
@@ -27,10 +27,13 @@ def main(cfg) -> None:
         reload_dataloaders_every_n_epochs=cfg.trainer.generate_every_epoch,
     )
     diff_model = instantiate(
-        hparams.model,
-        cfg_metrics=hparams.metrics,
-        grad_clip=hparams.trainer.gradient_clip_val,
-    )
+    hparams.model,
+    cfg_metrics=hparams.metrics,
+    grad_clip=hparams.trainer.gradient_clip_val,
+    vis_cfg=hparams.visual,
+    cfg_model=hparams.architectures,
+     _recursive_=False,
+)
     trainer.fit(diff_model, dm)
 
 

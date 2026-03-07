@@ -5,6 +5,7 @@ from omegaconf import OmegaConf
 
 
 def process_hparams(hparams, print_hparams=True):
+    OmegaConf.set_struct(hparams, False)
     if hparams.trainer.logging == "online":
         hparams.show = False
 
@@ -13,7 +14,6 @@ def process_hparams(hparams, print_hparams=True):
     id = hashlib.sha1(
         repr(sorted(hashable_config.__dict__.items())).encode()
     ).hexdigest()
-    OmegaConf.set_struct(hparams, False)
     hparams.hparams_id = id
     OmegaConf.set_struct(hparams, True)
     if print_hparams:
