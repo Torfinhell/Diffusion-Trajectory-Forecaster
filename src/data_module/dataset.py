@@ -3,62 +3,81 @@ import pickle
 from pathlib import Path
 from typing import Optional
 
+import jax.numpy as jnp
 from hydra.utils import instantiate
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 from waymax import config, dataloader
 
+from .data_process import data_process_scenario
+
 
 class DiffusionTrackerDataset(Dataset):
     GLOBAL_ITER = None
+    TRAIN_DIR = 0
 
     def __init__(
         self,
         waymax_conf_version: str,
         gs_path: str,
         num_states: Optional[int] = None,
-        download_path: Optional[str] = None,
+        download_folder: Optional[str] = None,
         max_num_objects: Optional[int] = None,
+        extract_data_conf=None,
     ):
         super().__init__()
+        self.extract_data = extract_data_conf is not None
         if self.__class__.GLOBAL_ITER is None:
             waymax_config = getattr(config, waymax_conf_version)
             waymax_config = dataclasses.replace(
                 waymax_config,
-                path=f"{gs_path}1000",
+                path=f"{gs_path}",
                 max_num_objects=max_num_objects,
             )
             self.__class__.GLOBAL_ITER = dataloader.simulator_state_generator(
                 config=waymax_config
             )
-        self.states = []
-        file_name = "states.pickle"
-        if download_path is not None:
-            download_path = Path(download_path)
-        if download_path is not None and Path(download_path / file_name).exists():
-            with open(download_path / "states.pickle", "rb") as file:
-                self.states = pickle.load(file)
+        self.data = []
+        if download_folder is not None:
+            download_folder = Path(download_folder)
+            if "train" in download_folder:
+                download_path = (
+                    download_folder / f"states_{self.__class__.TRAIN_DIR}.pkl"
+                )
+                self.__class__.TRAIN_DIR += 1
+            else:
+                download_path = download_folder / "states.pkl"
+        if download_folder is not None and download_path.exists():
+            with open(download_path, "rb") as file:
+                pickle.load(self.data, file)
+            print(f"Downloaded states from {download_path}")
         else:
             for ind in tqdm(
                 range(num_states), total=num_states, desc="Downloading states..."
             ):
                 try:
                     state = next(self.__class__.GLOBAL_ITER)
-                    self.states.append(state)
+                    if self.extract_data:
+                        # self.data.append(data_process_scenario(jnp.expand_dims(state, 0), **extract_data_conf))
+                        self.data.append(
+                            data_process_scenario(state, **extract_data_conf)
+                        )
+                    else:
+                        self.data.append({"scenario": state})
                 except Exception as e:
                     print(
                         f"Iteration through states finished with exception {e} \n"
                         f"at ind: {ind}, and max number of states: {num_states} \n"
-                        f"gs_path is {gs_path}1000"
+                        f"gs_path is {gs_path}"
                     )
                     break
-            if download_path is not None:
-                with open(download_path / "states.pickle", "wb") as file:
-                    pickle.dump(self.states, file)
+            if download_folder is not None:
+                with open(download_path, "wb") as file:
+                    pickle.dump(self.data, file)
                 print(f"Downloaded states to {download_path}")
 
     def __getitem__(self, key):
-        return self.states[key]
+        return self.data[key]
 
     def __len__(self):
-        return len(self.states)
+        return len(self.data)
