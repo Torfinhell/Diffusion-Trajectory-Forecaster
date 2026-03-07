@@ -47,6 +47,7 @@ class DiffusionTrackerDataset(Dataset):
                 self.__class__.TRAIN_DIR += 1
             else:
                 download_path = download_folder / "states.pkl"
+            download_path.parent.mkdir(parents=True, exist_ok=True)
         if download_folder is not None and download_path.exists():
             with open(download_path, "rb") as file:
                 self.data = pickle.load(file)
