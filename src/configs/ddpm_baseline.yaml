@@ -20,5 +20,5 @@ trainer:
   samples_per_scene: 1
   generate_every_epoch: 1
   print_hparams: True
-  logging: "online"
+  logging: "offline"
   load_last_checkpoint: False
