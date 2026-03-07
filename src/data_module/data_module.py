@@ -28,8 +28,8 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
             raise NotImplementedError("Didnt implement not fit stage")
 
     def train_dataloader(self):
-        if getattr(self.cfg_ds, "val", None) is not None:
-            self.train_dataset = instantiate(self.cfg_ds.val)
+        if getattr(self.cfg_ds, "train", None) is not None:
+            self.train_dataset = instantiate(self.cfg_ds.train)
         return instantiate(
             self.cfg_dl.train,
             collate_fn=waymax_collate,

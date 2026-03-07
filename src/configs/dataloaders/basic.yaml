@@ -1,5 +1,15 @@
 train:
   _target_: torch.utils.data.DataLoader
-  batch_size: 10
+  batch_size: 5
+  num_workers: 0
+  pin_memory: True
+val:
+  _target_: torch.utils.data.DataLoader
+  batch_size: 5
+  num_workers: 0
+  pin_memory: True
+test:
+  _target_: torch.utils.data.DataLoader
+  batch_size: 5
   num_workers: 0
   pin_memory: True
