@@ -1,0 +1,7 @@
+max_num_objects : 64
+max_polylines : 256
+current_index : 10
+num_points_polyline : 30
+use_log : True
+selected_agents : None
+remove_history : False
