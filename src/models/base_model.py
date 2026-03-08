@@ -1,18 +1,19 @@
 import pathlib
-from functools import partial
+import tempfile
 
 import diffrax as dfx
-import einops
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import matplotlib.pyplot as plt
+import numpy as np
 import pytorch_lightning as L
 import torch
 import wandb
+from PIL import Image
 from hydra.utils import instantiate
 from src.visualization.viz import plot_simulator_state
+from src.metrics import MetricCollection
 
 
 class BaseDiffusionModel(L.LightningModule):
@@ -47,10 +48,12 @@ class BaseDiffusionModel(L.LightningModule):
         self.dt0 = 0.1
         self.samples = 10
         self.global_step_ = 0
-        self.metrics = cfg_metrics
+        self.metrics_train = MetricCollection([instantiate(m) for m in self.metrics.train])
+        self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
         self.model = self.get_model()
         self.val_metric_batches = 3
         self._val_batches_for_metrics = []
+        self.metrics_prefix = "Val"
         self.configure_optimizers()
 
     def get_model(self):
@@ -84,12 +87,6 @@ class BaseDiffusionModel(L.LightningModule):
                 print("Loaded weights")
             except:
                 print("Didnt load weights")
-        """"TODO: implement sampling
-        self.logger.log_image(
-            key="Samples P1",
-            images=[wandb.Image(self.sample(), caption="Samples P1")],
-        )
-        """
 
     # def on_fit_end(self):
     # pathlib.Path.mkdir(f"checkpoints/ScoreBased", parents=True, exist_ok=True)
@@ -110,42 +107,68 @@ class BaseDiffusionModel(L.LightningModule):
                 self.optim.update,
             )
         )
-        dict_ = {"loss": torch.scalar_tensor(value.item())}
-        self.log_dict(dict_, prog_bar=True)
+        loss_value = jnp.asarray(value).item()
+        self.log("Train_Loss", loss_value, prog_bar=True, on_step=False, on_epoch=True, batch_size=1)
+        dict_ = {"loss": torch.scalar_tensor(loss_value)}
         self.global_step_ += 1
         return dict_
 
-    def sample(self):
-        self.sample_key, *sample_key = jr.split(self.sample_key, self.samples**2 + 1)
-        sample_key = jnp.stack(sample_key)
-        sample_fn = partial(
-            BaseDiffusionModel.single_sample_fn,
+    def sample(self, context, horizon, key=None):
+        """
+        Sample future trajectories for all agents.
+        :param context: [N, T_hist, 2]
+        :param horizon: int H
+        :return: [N, H, 2]
+        """
+        if key is None:
+            self.sample_key, key = jr.split(self.sample_key)
+
+        N = context.shape[0]
+        context_flat = context.reshape(N, -1)  # [N, T_hist*2]
+        sample_keys = jr.split(key, N)
+
+        sample_one = lambda kk, cc: self.single_sample_fn(
+            self.model, self.int_beta, (horizon * 2,), self.dt0, self.t1, kk, cc
+        )
+        pred_flat = jax.vmap(sample_one)(sample_keys, context_flat)  # [N, H*2]
+        return pred_flat.reshape(N, horizon, 2)
+
+    def sample_all_solutions(self, context, horizon, num_solutions=20, key=None):
+        """
+        Sample full reverse trajectory states for all agents.
+        Returns:
+            final_pred: [N, H, 2]
+            all_preds: [S, N, H, 2] where S=num_solutions
+        """
+        if key is None:
+            self.sample_key, key = jr.split(self.sample_key)
+
+        N = context.shape[0]
+        context_flat = context.reshape(N, -1)  # [N, T_hist*2]
+        sample_keys = jr.split(key, N)
+
+        sample_one = lambda kk, cc: self.single_sample_path_fn(
             self.model,
             self.int_beta,
-            (1, 28, 28),
+            (horizon * 2,),
             self.dt0,
             self.t1,
+            kk,
+            cc,
+            num_solutions,
         )
-        sample = jax.vmap(sample_fn)(sample_key)
-        # sample = data_mean + data_std * sample
-        # sample = jnp.clip(sample, data_min, data_max)
-        sample = einops.rearrange(
-            sample, "(n1 n2) 1 h w -> (n1 h) (n2 w)", n1=self.samples, n2=self.samples
-        )
-        fig = plt.figure()
-        plt.imshow(sample, cmap="Greys")
-        plt.axis("off")
-        plt.title(f"{self.global_step_}")
-        plt.tight_layout()
-        if self.hparams.get("show", False):
-            plt.show()
-        return fig
+        # [N, S, H*2]
+        pred_path_flat = jax.vmap(sample_one)(sample_keys, context_flat)
+        pred_path = pred_path_flat.reshape(N, num_solutions, horizon, 2)  # [N, S, H, 2]
+        pred_path = jnp.transpose(pred_path, (1, 0, 2, 3))  # [S, N, H, 2]
+        final_pred = pred_path[-1]
+        return final_pred, pred_path
 
     def validation_step(self, batch):
         data = self.get_data(batch, t=self.history)
-        value = self.batch_loss_fn(self.model, self.weight, self.int_beta, data, self.t1, self.loader_key)
-        # dict_ = {"loss": torch.scalar_tensor(value.item())}
-        self.log("Val_Loss", jnp.asarray(value).item(), prog_bar=True, batch_size=1)
+        self.loader_key, val_key = jr.split(self.loader_key)
+        value = self.batch_loss_fn(self.model, self.weight, self.int_beta, data, self.t1, val_key)
+        self.log("Val_Loss", jnp.asarray(value).item(), prog_bar=True, on_step=False, on_epoch=True, batch_size=1)
         # collect some first batches to compute metrics on
         if (
             self.metrics is not None
@@ -156,55 +179,101 @@ class BaseDiffusionModel(L.LightningModule):
     def on_validation_epoch_end(self) -> None:
         # pathlib.Path.mkdir(f"checkpoints/ScoreBased", parents=True, exist_ok=True)
         # eqx.tree_serialise_leaves(f"checkpoints/ScoreBased/last.eqx", self.model)
-        if self.metrics is None:
+        if self.metrics_val is None:
             return
-        #TODO: traj sampling
-        """
+        
         images = []
-        self.metrics.reset()
+        diffusion_video_frames = []
+        self.metrics_val.reset()
         for batch in self._val_batches_for_metrics:
-            # Assuming batch = {"gt_xy": gt_xy, "gt_valid": gt_valid, ...}
-            data = self.get_data(batch, t=0)
+            data = self.get_data(batch, t=self.history)
             gt_xy = data["traj"]
             valid = data["mask"]
+            context = data["context"]
             
-            self.sample_key, k = jr.split(self.sample_key)
-            pred_xy = self.sample_trajectory(batch, k)  # must match gt shape
+            # Visualize/evaluate first batch element only (consistent with batch_idx=0 below)
+            gt_xy_0 = gt_xy[0]        # [N, H, 2]
+            valid_0 = valid[0]        # [N, H]
+            context_0 = context[0]    # [N, T_hist, 2]
+            _, H, _ = gt_xy_0.shape
+            sample_steps = int(self.vis.get("sample_steps", 20))
+            pred_xy, pred_path = self.sample_all_solutions(context_0, H, num_solutions=sample_steps)
 
-            self.metrics.update(pred_xy, gt_xy, valid)
+            self.metrics_val.update(pred_xy, gt_xy_0, valid_0)
 
+            viz_state = batch["scenario"] if isinstance(batch, dict) and "scenario" in batch else batch
             img = plot_simulator_state(
-                batch,
+                viz_state,
                 batch_idx=0,
-                use_log_traj=self.cfg_vis.get("use_log_traj", True),
-                viz_config=self.cfg_vis.get("viz_config"),
-                plot_all_trajectories=self.cfg_vis.get("plot_all_trajectories", True),
+                use_log_traj=self.vis.get("use_log_traj", True),
+                viz_config=self.vis.get("viz_config"),
+                plot_all_trajectories=self.vis.get("plot_all_trajectories", True),
                 pred_xy=pred_xy,
-                pred_alpha=self.cfg_vis.get("pred_alpha", 0.8),
-                pred_linewidth=self.cfg_vis.get("pred_linewidth", 2.0),
-                pred_linestyle=self.cfg_vis.get("pred_linestyle", "--"),
-                pred_clip_to_view=self.cfg_vis.get("pred_clip_to_view", True),
-                gt_linewidth=self.cfg_vis.get("gt_linewidth", 2.0),
+                pred_alpha=self.vis.get("pred_alpha", 0.8),
+                pred_linewidth=self.vis.get("pred_linewidth", 2.0),
+                pred_linestyle=self.vis.get("pred_linestyle", "--"),
+                pred_clip_to_view=self.vis.get("pred_clip_to_view", True),
+                pred_raw_plot=self.vis.get("pred_raw_plot", False),
+                gt_linewidth=self.vis.get("gt_linewidth", 2.0),
             )
             images.append(wandb.Image(img))
+
+            # Build diffusion video on the first validation batch only.
+            if len(diffusion_video_frames) == 0 and viz_state is not None:
+                pred_path_np = np.asarray(pred_path)
+                for s in range(pred_path_np.shape[0]):
+                    frame = plot_simulator_state(
+                        viz_state,
+                        batch_idx=0,
+                        use_log_traj=self.vis.get("use_log_traj", True),
+                        viz_config=self.vis.get("viz_config"),
+                        plot_all_trajectories=self.vis.get("plot_all_trajectories", True),
+                        pred_xy=pred_path_np[s],
+                        pred_alpha=self.vis.get("pred_alpha", 0.8),
+                        pred_linewidth=self.vis.get("pred_linewidth", 2.0),
+                        pred_linestyle=self.vis.get("pred_linestyle", "--"),
+                        pred_clip_to_view=self.vis.get("pred_clip_to_view", True),
+                        pred_raw_plot=self.vis.get("pred_raw_plot", False),
+                        gt_linewidth=self.vis.get("gt_linewidth", 2.0),
+                    )
+                    diffusion_video_frames.append(frame)
 
         self.logger.log_image(
             key="Scenarios and predictions",
             images=images,
         )
+        if len(diffusion_video_frames) > 0:
+            video_np = np.stack(diffusion_video_frames, axis=0).astype(np.uint8)  # [T, H, W, C]
+            gif_path = pathlib.Path(tempfile.gettempdir()) / f"diffusion_path_{self.current_epoch}.gif"
+            pil_frames = [Image.fromarray(frame) for frame in video_np]
+            pil_frames[0].save(
+                gif_path,
+                save_all=True,
+                append_images=pil_frames[1:],
+                duration=max(1, int(1000 / int(self.vis.get("sample_video_fps", 6)))),
+                loop=0,
+            )
+            self.logger.experiment.log(
+                {
+                    "Diffusion trajectory video": wandb.Video(
+                        str(gif_path),
+                        fps=int(self.vis.get("sample_video_fps", 6)),
+                        format="gif",
+                    )
+                }
+            )
         
-        vals = self.metrics.compute()
+        vals = self.metrics_val.compute()
         log_dict = {
             f"{self.metrics_prefix}/{k}": float(jnp.asarray(v)) for k, v in vals.items()
         }
         self.log_dict(log_dict, prog_bar=True)
-        """
         self._val_batches_for_metrics.clear()
         
 
     @staticmethod
     @eqx.filter_jit
-    def single_sample_fn(model, int_beta, data_shape, dt0, t1, key):
+    def single_sample_fn(model, int_beta, data_shape, dt0, t1, key, context):
         """
         Sampling a single trajectory starting from normal noise at t1 and recovering data distribution at t0
         :param model:
@@ -229,7 +298,7 @@ class BaseDiffusionModel(L.LightningModule):
             t = jnp.array(t)
             _, beta = jax.jvp(fun=int_beta, primals=(t,), tangents=(jnp.ones_like(t),))
             return (
-                -0.5 * beta * (y + model(t, y))
+                -0.5 * beta * (y + model(t, y, context))
             )  # negative because we use -dt0 when solving
 
         term = dfx.ODETerm(drift)
@@ -249,6 +318,35 @@ class BaseDiffusionModel(L.LightningModule):
             # adjoint=dfx.NoAdjoint(),
         )
         return sol.ys[0]
+
+    @staticmethod
+    @eqx.filter_jit
+    def single_sample_path_fn(model, int_beta, data_shape, dt0, t1, key, context, num_solutions):
+        """
+        Return full reverse trajectory states sampled at `num_solutions` times.
+        Output shape: [num_solutions, data_shape]
+        """
+
+        def drift(t, y, args):
+            t = jnp.array(t)
+            _, beta = jax.jvp(fun=int_beta, primals=(t,), tangents=(jnp.ones_like(t),))
+            return -0.5 * beta * (y + model(t, y, context))
+
+        term = dfx.ODETerm(drift)
+        solver = dfx.Tsit5()
+        t0 = 0.0
+        y1 = jr.normal(key, data_shape)
+        ts = jnp.linspace(t1, t0, int(num_solutions))
+        sol = dfx.diffeqsolve(
+            terms=term,
+            solver=solver,
+            t0=t1,
+            t1=t0,
+            dt0=-dt0,
+            y0=y1,
+            saveat=dfx.SaveAt(ts=ts),
+        )
+        return sol.ys
 
     @staticmethod
     @eqx.filter_jit

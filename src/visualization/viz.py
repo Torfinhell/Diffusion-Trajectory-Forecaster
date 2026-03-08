@@ -278,6 +278,7 @@ def plot_simulator_state(
     pred_linewidth: float = 2.0,
     pred_linestyle: str = "-",                    # dashed
     pred_clip_to_view: bool = True,                # prevent long lines to offscreen garbage
+    pred_raw_plot: bool = False,                   # if True, plot raw predictions without filtering/masking
     gt_linewidth: float = 2.0,
 ) -> np.ndarray:
 
@@ -382,14 +383,14 @@ def plot_simulator_state(
       x = pred_flat[k, :, 0].astype(float, copy=True)
       y = pred_flat[k, :, 1].astype(float, copy=True)
 
-      ok = np.isfinite(x) & np.isfinite(y)
-      if pred_clip_to_view:
-        # allow small margin; otherwise points outside can create long segments
-        m = 5.0
-        ok &= (x >= x_min - m) & (x <= x_max + m) & (y >= y_min - m) & (y <= y_max + m)
-
-      x = np.where(ok, x, np.nan)
-      y = np.where(ok, y, np.nan)
+      if not pred_raw_plot:
+        ok = np.isfinite(x) & np.isfinite(y)
+        if pred_clip_to_view:
+          # allow small margin; otherwise points outside can create long segments
+          m = 5.0
+          ok &= (x >= x_min - m) & (x <= x_max + m) & (y >= y_min - m) & (y <= y_max + m)
+        x = np.where(ok, x, np.nan)
+        y = np.where(ok, y, np.nan)
 
       ax.plot(
         x, y,

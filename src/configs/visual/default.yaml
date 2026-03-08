@@ -9,7 +9,8 @@ pred_alpha: 0.8
 pred_linewidth: 2.0
 pred_linestyle: "-"
 pred_clip_to_view: true
-gt_linewidth: 2.0
+gt_linewidth: 0.85
+pred_raw_plot: true
 
 # passed into Waymax VizConfig(**viz_config)
 viz_config:

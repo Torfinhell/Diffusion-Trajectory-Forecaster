@@ -16,7 +16,29 @@ class DiffusionModel(BaseDiffusionModel):
 
     
     def get_data(self, batch, t):
-        traj = batch.log_trajectory
+        # Support both:
+        # 1) raw Waymax SimulatorState batch
+        # 2) dict batch with {"scenario": SimulatorState} from dataset/datamodule
+        # 3) extracted dict batch (agents_history/agents_future)
+        if isinstance(batch, dict):
+            if "scenario" in batch and batch["scenario"] is not None:
+                traj = batch["scenario"].log_trajectory
+            elif "agents_history" in batch and "agents_future" in batch:
+                past_xy = batch["agents_history"][..., :t, :2]
+                future_xy = batch["agents_future"][..., :, :2]
+                valid = jnp.any(batch["agents_future"][..., :, :2] != 0, axis=-1)
+                return {
+                    "traj": future_xy,
+                    "context": past_xy,
+                    "mask": valid,
+                }
+            else:
+                raise KeyError(
+                    "Unsupported batch dict format. Expected keys {'scenario'} or "
+                    "{'agents_history', 'agents_future'}."
+                )
+        else:
+            traj = batch.log_trajectory
 
         # past trajectory (context)
         past_xy = jnp.stack(
