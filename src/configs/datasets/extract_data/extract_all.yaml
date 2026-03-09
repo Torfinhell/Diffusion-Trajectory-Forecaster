@@ -5,3 +5,4 @@ num_points_polyline : 30
 use_log : True
 selected_agents : None
 remove_history : False
+history: 3

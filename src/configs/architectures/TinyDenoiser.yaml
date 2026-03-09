@@ -1,6 +1,0 @@
-model:
-  _target_: src.models.TinyDenoiser
-args:
-  hid_dim: 256
-  traj_len: 91
-  history: 3

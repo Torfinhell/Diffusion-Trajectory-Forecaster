@@ -1,5 +1,3 @@
-enabled: true
-
 # passed to your plot_simulator_state(...)
 use_log_traj: true
 highlight_obj: SDC

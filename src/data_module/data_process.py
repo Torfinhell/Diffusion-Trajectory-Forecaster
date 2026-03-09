@@ -327,6 +327,7 @@ def data_process_scenario(
     use_log=True,
     selected_agents=None,
     remove_history=False,
+    history=3,
 ):
     """
     Process the data for a given scenario.
@@ -433,7 +434,6 @@ def data_process_scenario(
 
     relations = calculate_relations(agents_history, polylines, traffic_light_points)
     relations = np.asarray(relations)
-
     data_dict = {
         "agents_history": np.float32(agents_history),
         "agents_interested": np.int32(agents_interested),
@@ -447,28 +447,3 @@ def data_process_scenario(
         "scenario": None,
     }
     return data_dict
-
-
-def data_collate_fn(batch_list):
-    """
-    Collects a batch of data from a list of transitions.
-
-    Args:
-        batch_list (List): a list of transitions.
-
-    Returns:
-        Dict[str, torch.Tensor]: a batch of data.
-    """
-    list_len = len(batch_list)
-    key_to_list = {}
-    for key in batch_list[0].keys():
-        key_to_list[key] = [batch_list[i][key] for i in range(list_len)]
-
-    input_batch = {}
-    for key, value in key_to_list.items():
-        if "scenario" not in key:
-            input_batch[key] = torch.from_numpy(np.stack(value, axis=0))
-        else:
-            input_batch[key] = value
-
-    return input_batch

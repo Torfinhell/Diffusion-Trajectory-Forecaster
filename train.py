@@ -1,11 +1,8 @@
 import hydra
 from hydra.utils import instantiate
-from omegaconf import DictConfig
-from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.models import DiffusionModel
 from src.utils import process_hparams
 
 
@@ -27,10 +24,6 @@ def main(cfg) -> None:
     )
     diff_model = instantiate(
         hparams.model,
-        cfg_metrics=hparams.metrics,
-        grad_clip=hparams.trainer.gradient_clip_val,
-        vis_cfg=hparams.visual,
-        cfg_model=hparams.architectures,
         _recursive_=False,
     )
     trainer.fit(diff_model, dm)

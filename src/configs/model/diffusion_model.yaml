@@ -1,3 +1,9 @@
 _target_: src.models.DiffusionModel
 seed: ${trainer.seed}
 load_last_checkpoint: ${trainer.load_last_checkpoint}
+cfg_metrics: ${metrics}
+grad_clip: ${trainer.gradient_clip_val}
+vis_cfg: ${visual}
+hid_dim: 256
+traj_len: 91
+num_blocks: 6

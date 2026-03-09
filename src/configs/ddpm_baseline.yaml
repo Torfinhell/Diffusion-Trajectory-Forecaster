@@ -6,7 +6,6 @@ defaults:
   - logger: wandb
   - metrics: all_metrics
   - visual: default
-  - architectures: TinyDenoiser
   - _self_
 trainer:
   num_epochs: 10
@@ -15,7 +14,6 @@ trainer:
   gradient_clip_val: 6.0
   log_every_n_steps: 10
   seed: 1
-  enabled: True
   val_batches: 4
   samples_per_scene: 1
   generate_every_epoch: 1
