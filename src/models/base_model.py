@@ -14,7 +14,7 @@ from hydra.utils import instantiate
 from PIL import Image
 
 import wandb
-from src.data_module import data_process_scenario
+from src.data_module import data_process_scenarios
 from src.metrics import MetricCollection
 from src.visualization.viz import plot_simulator_state
 
@@ -27,7 +27,6 @@ class BaseDiffusionModel(L.LightningModule):
         cfg_metrics,
         grad_clip,
         vis_cfg,
-        history,
         **kwargs,
     ):
         super().__init__()
@@ -41,7 +40,6 @@ class BaseDiffusionModel(L.LightningModule):
         self.vis = vis_cfg
         self.grad_clip = grad_clip
         self.load_last_checkpoint = load_last_checkpoint
-        self.history = history
         self.samples = 10
         self.global_step_ = 0
         self.metrics_train = MetricCollection(
@@ -85,9 +83,9 @@ class BaseDiffusionModel(L.LightningModule):
         :param key:
         :return:
         """
-        traj = batch["traj"]
-        context = batch["context"]
-        mask = batch.get("mask", None)
+        traj = batch["future_xy"]
+        context = batch["past_xy"]
+        mask = batch.get("future_valid", None)
 
         N = traj.shape[0]
 
@@ -122,7 +120,7 @@ class BaseDiffusionModel(L.LightningModule):
     @staticmethod
     def batch_loss_fn(model, weight, int_beta, batch, t1, key):
 
-        batch_size = batch["traj"].shape[0]
+        batch_size = batch["future_xy"].shape[0]
         tkey, losskey = jr.split(key)
         losskey = jr.split(losskey, batch_size)
         """
@@ -154,7 +152,6 @@ class BaseDiffusionModel(L.LightningModule):
     # eqx.tree_serialise_leaves(f"checkpoints/ScoreBased/last.eqx", self.model)
 
     def training_step(self, batch):
-        batch.update(BaseDiffusionModel.get_data(batch, self.history))
         value, self.model, self.train_key, self.opt_state = (
             BaseDiffusionModel.make_step(
                 self.model,
@@ -233,7 +230,6 @@ class BaseDiffusionModel(L.LightningModule):
         return final_pred, pred_path
 
     def validation_step(self, batch):
-        batch.update(BaseDiffusionModel.get_data(batch, self.history))
         self.loader_key, val_key = jr.split(self.loader_key)
         value = self.batch_loss_fn(
             self.model, self.weight, self.int_beta, batch, self.t1, val_key
@@ -263,9 +259,9 @@ class BaseDiffusionModel(L.LightningModule):
         diffusion_video_frames = []
         self.metrics_val.reset()
         for batch in self._val_batches_for_metrics:
-            gt_xy = batch["traj"]
-            valid = batch["mask"]
-            context = batch["context"]
+            gt_xy = batch["future_xy"]
+            valid = batch["future_valid"]
+            context = batch["past_xy"]
 
             # Visualize/evaluate first batch element only (consistent with batch_idx=0 below)
             gt_xy_0 = gt_xy[0]  # [N, H, 2]
@@ -428,35 +424,3 @@ class BaseDiffusionModel(L.LightningModule):
         model = eqx.apply_updates(model, updates)
         key = jr.split(key, 1)[0]
         return loss, model, key, opt_state
-
-    @staticmethod
-    def get_data(batch, history):
-        # past_xy = batch["agents_history"][..., :history, :2]
-        # future_xy = batch["agents_future"][..., :, :2]
-        # valid = jnp.any(batch["agents_future"][..., :, :2] != 0, axis=-1)
-        # return {
-        #     "traj": future_xy,
-        #     "context": past_xy,
-        #     "mask": valid,
-        # }
-        traj = batch["scenario"].log_trajectory
-        # past trajectory (context)
-        past_xy = jnp.stack(
-            [traj.x[..., :history], traj.y[..., :history]],
-            axis=-1,
-        )  # [B, N, T_hist, 2]
-
-        # future trajectory (target for diffusion)
-        future_xy = jnp.stack(
-            [traj.x[..., history:], traj.y[..., history:]],
-            axis=-1,
-        )  # [B, N, H, 2]
-
-        # mask for valid objects
-        valid = traj.valid[..., history:]  # [B, N, H]
-
-        return {
-            "traj": future_xy,
-            "context": past_xy,
-            "mask": valid,
-        }

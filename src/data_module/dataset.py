@@ -3,13 +3,14 @@ import pickle
 from pathlib import Path
 from typing import Optional
 
+import jax
 import jax.numpy as jnp
 from hydra.utils import instantiate
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 from waymax import config, dataloader
 
-from .data_process import data_process_scenario
+from .data_process import data_process_scenarios
 
 
 class DiffusionTrackerDataset(Dataset):
@@ -51,6 +52,18 @@ class DiffusionTrackerDataset(Dataset):
         if download_folder is not None and download_path.exists():
             with open(download_path, "rb") as file:
                 self.data = pickle.load(file)
+            if self.extract_data:
+                for i, state in enumerate(self.data):
+                    batched_scenario = jax.tree_util.tree_map(
+                        lambda x: x[None, ...], state["scenario"]
+                    )
+                    processed_scenario = data_process_scenarios(
+                        batched_scenario, **extract_data_conf
+                    )
+                    self.data[i] = jax.tree_util.tree_map(
+                        lambda x: x[0], processed_scenario
+                    )
+                    self.data[i].update(state)
             print(f"Downloaded states from {download_path}")
         else:
             for ind in tqdm(
@@ -59,9 +72,14 @@ class DiffusionTrackerDataset(Dataset):
                 try:
                     state = next(self.__class__.GLOBAL_ITER)
                     if self.extract_data:
-                        # self.data.append(data_process_scenario(jnp.expand_dims(state, 0), **extract_data_conf))
-                        self.data.append(
-                            data_process_scenario(state, **extract_data_conf)
+                        batched_scenario = jax.tree_util.tree_map(
+                            lambda x: x[None, ...], state["scenario"]
+                        )
+                        processed_scenario = data_process_scenarios(
+                            batched_scenario, **extract_data_conf
+                        )
+                        self.data[i] = jax.tree_util.tree_map(
+                            lambda x: x[0], processed_scenario
                         )
                     else:
                         self.data.append({"scenario": state})

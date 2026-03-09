@@ -7,3 +7,4 @@ vis_cfg: ${visual}
 hid_dim: 256
 traj_len: 91
 num_blocks: 6
+history: ${datasets.extract_data.current_index}

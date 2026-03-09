@@ -35,10 +35,11 @@ class DiffDenoiser(eqx.Module):
 
 
 class DiffusionModel(BaseDiffusionModel):
-    def __init__(self, hid_dim, traj_len, num_blocks, **kwargs):
+    def __init__(self, hid_dim, traj_len, num_blocks, history, **kwargs):
         self.hid_dim = hid_dim
         self.traj_len = traj_len
         self.num_blocks = num_blocks
+        self.history = history
         super().__init__(**kwargs)
 
     def get_model(self, key_model):

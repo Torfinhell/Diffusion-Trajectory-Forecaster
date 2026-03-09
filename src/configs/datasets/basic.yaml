@@ -9,8 +9,7 @@ train:
   max_num_objects: 32
   download_folder: "data/dataset/train"
   # download_folder: null
-  # extract_data_conf: ${datasets.extract_data}
-  extract_data_conf: null
+  extract_data_conf: ${datasets.extract_data}
 val:
   _target_: src.data_module.dataset.DiffusionTrackerDataset
   waymax_conf_version: WOD_1_3_1_TRAINING
@@ -19,7 +18,8 @@ val:
   max_num_objects: 32
   download_folder: "data/dataset/val"
   # download_folder: null
-  extract_data_conf: null
+  # extract_data_conf: null
+  extract_data_conf: ${datasets.extract_data}
 test:
   _target_: src.data_module.dataset.DiffusionTrackerDataset
   waymax_conf_version: WOD_1_3_1_TRAINING
