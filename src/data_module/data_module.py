@@ -20,11 +20,11 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         if stage == "fit":
             if getattr(self.cfg_ds, "val", None) is not None:
                 self.val_dataset = instantiate(self.cfg_ds.val)
-        if stage == "test":
+        elif stage == "test":
             if getattr(self.cfg_ds, "test", None) is not None:
                 self.test_dataset = instantiate(self.cfg_ds.test)
         else:
-            raise NotImplementedError("Didnt implement not fit stage")
+            raise NotImplementedError("Didnt implement not fit or test stage")
 
     def train_dataloader(self):
         if self.cfg_ds.get("train") is not None:  # safe for both dict and DictConfig
