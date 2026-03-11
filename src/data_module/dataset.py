@@ -24,10 +24,10 @@ class DiffusionTrackerDataset(Dataset):
         num_states: Optional[int] = None,
         download_folder: Optional[str] = None,
         max_num_objects: Optional[int] = None,
+        extract_scene=False,
         extract_data_conf=None,
     ):
         super().__init__()
-        self.extract_data = extract_data_conf is not None
         if self.__class__.GLOBAL_ITER is None:
             waymax_config = getattr(config, waymax_conf_version)
             waymax_config = dataclasses.replace(
@@ -52,7 +52,7 @@ class DiffusionTrackerDataset(Dataset):
         if download_folder is not None and download_path.exists():
             with open(download_path, "rb") as file:
                 self.data = pickle.load(file)
-            # if self.extract_data:
+            # if not extract_scene:
             #     for i, state in enumerate(self.data):
             #         batched_scenario = jax.tree_util.tree_map(
             #             lambda x: x[None, ...], state["scenario"]
@@ -71,7 +71,7 @@ class DiffusionTrackerDataset(Dataset):
                     batched_scenario = jax.tree_util.tree_map(
                         lambda x: x[None, ...], state
                     )
-                    if self.extract_data:
+                    if not extract_scene:
                         self.data.append(
                             data_process_scenarios(
                                 batched_scenario, **extract_data_conf
