@@ -71,11 +71,19 @@ class DiffusionTrackerDataset(Dataset):
                     batched_scenario = jax.tree_util.tree_map(
                         lambda x: x[None, ...], state
                     )
-                    self.data.append(
-                        data_process_scenarios(batched_scenario, **extract_data_conf)
-                    )
-                    if not self.extract_data:
-                        self.data[-1].update({"scenario": state})
+                    if self.extract_data:
+                        self.data.append(
+                            data_process_scenarios(
+                                batched_scenario, **extract_data_conf
+                            )
+                        )
+                    else:
+                        self.data.append({"scenario": state})
+                        self.data[-1].update(
+                            data_process_scenarios(
+                                batched_scenario, **extract_data_conf
+                            )
+                        )
 
                 except Exception as e:
                     print(
