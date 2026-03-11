@@ -84,7 +84,6 @@ class DiffusionTrackerDataset(Dataset):
                                 batched_scenario, **extract_data_conf
                             )
                         )
-                        print(self.data)
 
                 except Exception as e:
                     print(
