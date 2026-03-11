@@ -8,7 +8,7 @@ defaults:
   - visual: default
   - _self_
 trainer:
-  num_epochs: 10
+  num_epochs: 100
   train_epoch_len: 100
   val_epoch_len: 10
   gradient_clip_val: 6.0

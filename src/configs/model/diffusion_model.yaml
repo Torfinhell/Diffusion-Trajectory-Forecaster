@@ -1,4 +1,4 @@
-_target_: src.models.DiffusionModel
+_target_: src.models.DiffusionLinearModel
 seed: ${trainer.seed}
 load_last_checkpoint: ${trainer.load_last_checkpoint}
 cfg_metrics: ${metrics}

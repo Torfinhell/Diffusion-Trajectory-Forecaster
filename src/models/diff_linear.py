@@ -34,7 +34,7 @@ class DiffDenoiser(eqx.Module):
         return self.fc_out(x).reshape(self.out_shape)
 
 
-class DiffusionModel(BaseDiffusionModel):
+class DiffusionLinearModel(BaseDiffusionModel):
     def __init__(
         self, hid_dim, input_shape: list[int], output_shape: list[int], **kwargs
     ):

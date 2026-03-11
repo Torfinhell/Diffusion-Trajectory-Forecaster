@@ -284,6 +284,7 @@ def data_process_scenarios(
     num_points_polyline=30,
     use_log=True,
     remove_history=False,
+    model_type="linear",
 ):
     data_dict = {}
     # (agents_history, agents_future, agents_interested, agents_type, agents_id) = (
@@ -302,16 +303,13 @@ def data_process_scenarios(
         )
     )
     traj = scenarios.log_trajectory
-    NUM_AGENTS = scenarios.object_metadata.num_objects
     # past trajectory (context)
     data_dict.update(
         {
             "context": jnp.stack(
                 [traj.x[..., :current_index], traj.y[..., :current_index]],
                 axis=-1,
-            ).reshape(
-                NUM_AGENTS, -1
-            )  # [N,T_hist*2]
+            )  # [N,T_hist,2]
         }
     )
     # future trajectory (target for diffusion)
@@ -320,9 +318,7 @@ def data_process_scenarios(
             "gt_xy": jnp.stack(
                 [traj.x[..., current_index:], traj.y[..., current_index:]],
                 axis=-1,
-            ).reshape(
-                NUM_AGENTS, -1
-            )  # [N*H*2]
+            )  # [N,H,2]
         }
     )
 
@@ -331,9 +327,7 @@ def data_process_scenarios(
         {
             "gt_xy_mask": jnp.repeat(
                 traj.valid[..., current_index:, None], 2, axis=-1
-            ).reshape(
-                NUM_AGENTS, -1
-            )  # [N*H*2]
+            )  # [N,H,2]
         }
     )
     # data_dict.update({
