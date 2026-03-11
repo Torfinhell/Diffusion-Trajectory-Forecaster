@@ -69,7 +69,7 @@ class DiffusionTrackerDataset(Dataset):
                 try:
                     state = next(self.__class__.GLOBAL_ITER)
                     batched_scenario = jax.tree_util.tree_map(
-                        lambda x: x[None, ...], state["scenario"]
+                        lambda x: x[None, ...], state
                     )
                     self.data.append(
                         data_process_scenarios(batched_scenario, **extract_data_conf)
