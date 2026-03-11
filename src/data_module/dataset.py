@@ -75,7 +75,7 @@ class DiffusionTrackerDataset(Dataset):
                         data_process_scenarios(batched_scenario, **extract_data_conf)
                     )
                     if not self.extract_data:
-                        self.data.append({"scenario": state})
+                        self.data[-1].update({"scenario": state})
 
                 except Exception as e:
                     print(
