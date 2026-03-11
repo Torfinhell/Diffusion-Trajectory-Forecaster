@@ -68,17 +68,15 @@ class DiffusionTrackerDataset(Dataset):
             ):
                 try:
                     state = next(self.__class__.GLOBAL_ITER)
-                    if self.extract_data:
-                        batched_scenario = jax.tree_util.tree_map(
-                            lambda x: x[None, ...], state["scenario"]
-                        )
-                        self.data.append(
-                            data_process_scenarios(
-                                batched_scenario, **extract_data_conf
-                            )
-                        )
-                    else:
+                    batched_scenario = jax.tree_util.tree_map(
+                        lambda x: x[None, ...], state["scenario"]
+                    )
+                    self.data.append(
+                        data_process_scenarios(batched_scenario, **extract_data_conf)
+                    )
+                    if not self.extract_data:
                         self.data.append({"scenario": state})
+
                 except Exception as e:
                     print(
                         f"Iteration through states finished with exception {e} \n"
