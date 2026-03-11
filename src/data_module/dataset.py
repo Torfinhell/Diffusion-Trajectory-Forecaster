@@ -52,15 +52,15 @@ class DiffusionTrackerDataset(Dataset):
         if download_folder is not None and download_path.exists():
             with open(download_path, "rb") as file:
                 self.data = pickle.load(file)
-            if self.extract_data:
-                for i, state in enumerate(self.data):
-                    batched_scenario = jax.tree_util.tree_map(
-                        lambda x: x[None, ...], state["scenario"]
-                    )
-                    self.data[i] = data_process_scenarios(
-                        batched_scenario, **extract_data_conf
-                    )
-                    self.data[i].update(state)
+            # if self.extract_data:
+            #     for i, state in enumerate(self.data):
+            #         batched_scenario = jax.tree_util.tree_map(
+            #             lambda x: x[None, ...], state["scenario"]
+            #         )
+            #         self.data[i] = data_process_scenarios(
+            #             batched_scenario, **extract_data_conf
+            #         )
+            #         self.data[i].update(state)
             print(f"Downloaded states from {download_path}")
         else:
             for ind in tqdm(
@@ -72,11 +72,10 @@ class DiffusionTrackerDataset(Dataset):
                         batched_scenario = jax.tree_util.tree_map(
                             lambda x: x[None, ...], state["scenario"]
                         )
-                        processed_scenario = data_process_scenarios(
-                            batched_scenario, **extract_data_conf
-                        )
-                        self.data[i] = jax.tree_util.tree_map(
-                            lambda x: x[0], processed_scenario
+                        self.data.append(
+                            data_process_scenarios(
+                                batched_scenario, **extract_data_conf
+                            )
                         )
                     else:
                         self.data.append({"scenario": state})

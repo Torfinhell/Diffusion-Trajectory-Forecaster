@@ -1,1 +1,1 @@
-from src.models.diff_model import DiffusionModel
+from models.diff_linear import DiffusionModel
