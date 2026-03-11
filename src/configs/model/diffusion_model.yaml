@@ -5,6 +5,5 @@ cfg_metrics: ${metrics}
 grad_clip: ${trainer.gradient_clip_val}
 vis_cfg: ${visual}
 hid_dim: 256
-traj_len: 91
-num_blocks: 6
-history: ${datasets.extract_data.current_index}
+input_shape: [32, 20]
+output_shape: [32, 162]

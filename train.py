@@ -1,5 +1,6 @@
 import hydra
 from hydra.utils import instantiate
+from pytorch_lightning.callbacks import RichProgressBar
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
@@ -11,11 +12,12 @@ def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=True)
     logger = instantiate(hparams.logger)
     dm = DiffusionTrackerDataModule(hparams.datasets, hparams.dataloaders)
+    progress_bar = RichProgressBar(leave=True)
     trainer = Trainer(
         accelerator="auto",
         max_epochs=hparams.trainer.num_epochs,
         logger=logger,
-        callbacks=[],
+        callbacks=[progress_bar],
         log_every_n_steps=hparams.trainer.log_every_n_steps,
         enable_progress_bar=True,
         limit_train_batches=hparams.trainer.train_epoch_len,

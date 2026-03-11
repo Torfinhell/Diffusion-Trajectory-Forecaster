@@ -57,11 +57,8 @@ class DiffusionTrackerDataset(Dataset):
                     batched_scenario = jax.tree_util.tree_map(
                         lambda x: x[None, ...], state["scenario"]
                     )
-                    processed_scenario = data_process_scenarios(
+                    self.data[i] = data_process_scenarios(
                         batched_scenario, **extract_data_conf
-                    )
-                    self.data[i] = jax.tree_util.tree_map(
-                        lambda x: x[0], processed_scenario
                     )
                     self.data[i].update(state)
             print(f"Downloaded states from {download_path}")

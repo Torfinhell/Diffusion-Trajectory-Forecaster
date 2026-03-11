@@ -33,17 +33,20 @@ class MetricCollection:
 
     def add(self, metric):
         self.metrics.append(metric)
-    
+
     def reset(self):
         for metric in self.metrics:
             metric.reset()
-    
-    def update(self, pred_xy, gt_xy, valid):
+
+    def update(self, pred_xy, gt_xy, mask):
         for metric in self.metrics:
-            metric.update(pred_xy, gt_xy, valid)
+            metric.update(pred_xy, gt_xy, mask)
 
     def compute(self):
         res = {}
         for metric in self.metrics:
             res[metric.name] = metric.compute()
         return res
+
+    def __len__(self):
+        return len(self.metrics)

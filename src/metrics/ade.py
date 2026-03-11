@@ -22,27 +22,21 @@ class AdeMetric(BaseMetric):
             sum_error=jnp.array(0.0, jnp.float32), count=jnp.array(0.0, jnp.float32)
         )
 
-    def compute(self, eps: float = 1e-8) -> jnp.ndarray:
-        return self.state.sum_error / (self.state.count + eps)
+    def compute(self) -> jnp.ndarray:
+        return self.state.sum_error / (self.state.count + self.eps)
 
     def update(
         self,
-        pred_xy: jnp.ndarray,
-        gt_xy: jnp.ndarray,
-        valid: jnp.ndarray | None,
+        pred_xy: jnp.ndarray,  # shape: (agents, H*2)
+        gt_xy: jnp.ndarray,  # shape: (agents, H*2)
+        gt_mask: jnp.ndarray | None,  # shape: (agents, H*2) or None
     ) -> None:
-        # pred_xy, gt_xy: (..., T, 2)
-        diff = pred_xy - gt_xy
-        dist = jnp.sqrt(jnp.sum(diff * diff, axis=-1))  # (..., T)
-
-        if valid is None:
-            batch_sum = jnp.sum(dist)
-            batch_cnt = dist.size
-            batch_cnt = jnp.array(batch_cnt, jnp.float32)
-        else:
-            valid_f = valid.astype(jnp.float32)  # (..., T)
-            batch_sum = jnp.sum(dist * valid_f)
-            batch_cnt = jnp.sum(valid_f)
-
-        self.state.sum_error += batch_sum
-        self.state.count += batch_cnt
+        agents, flat_dim = pred_xy.shape
+        H = flat_dim // 2
+        pred = pred_xy.reshape(agents, H, 2)
+        gt = gt_xy.reshape(agents, H, 2)
+        diff = pred - gt
+        dist = jnp.sqrt(jnp.sum(diff**2, axis=-1))
+        mask = gt_mask.reshape(agents, H, 2)[..., 0]
+        self.state.sum_error += jnp.sum(dist * mask.astype(jnp.float32))
+        self.state.count += jnp.sum(mask.astype(jnp.float32))

@@ -19,40 +19,29 @@ class FdeMetric(BaseMetric):
 
     def reset(self):
         self.state = FDEState(
-            sum_error=jnp.array(0.0, jnp.float32),
-            count=jnp.array(0.0, jnp.float32),
+            sum_error=jnp.array(0.0, jnp.float32), count=jnp.array(0.0, jnp.float32)
         )
 
-    def compute(self, eps: float = 1e-8) -> jnp.ndarray:
-        return self.state.sum_error / (self.state.count + eps)
+    def compute(self) -> jnp.ndarray:
+        return self.state.sum_error / (self.state.count + self.eps)
 
     def update(
         self,
         pred_xy: jnp.ndarray,
         gt_xy: jnp.ndarray,
-        valid: jnp.ndarray | None,
+        gt_mask: jnp.ndarray | None,
     ) -> None:
-        """
-        FDE (Final Displacement Error)
+        agents, flat_dim = pred_xy.shape
+        H = flat_dim // 2
 
-        pred_xy : (..., T, 2)
-        gt_xy   : (..., T, 2)
-        valid   : (..., T) optional
-        """
+        pred = pred_xy.reshape(agents, H, 2)
+        gt = gt_xy.reshape(agents, H, 2)
 
-        pred_final = pred_xy[..., -1, :]
-        gt_final = gt_xy[..., -1, :]
+        diff = pred - gt
+        dist = jnp.sqrt(jnp.sum(diff**2, axis=-1))
+        dist_last = dist[..., -1]
+        mask = gt_mask.reshape(agents, H, 2)[..., 0]
+        mask_last = mask[..., -1]
 
-        diff = pred_final - gt_final
-        dist = jnp.sqrt(jnp.sum(diff * diff, axis=-1))  # (...)
-
-        if valid is not None:
-            final_valid = valid[..., -1].astype(jnp.float32)
-            batch_sum = jnp.sum(dist * final_valid)
-            batch_cnt = jnp.sum(final_valid)
-        else:
-            batch_sum = jnp.sum(dist)
-            batch_cnt = jnp.array(dist.size, jnp.float32)
-
-        self.state.sum_error += batch_sum
-        self.state.count += batch_cnt
+        self.state.sum_error += jnp.sum(dist_last * mask_last.astype(jnp.float32))
+        self.state.count += jnp.sum(mask_last.astype(jnp.float32))

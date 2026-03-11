@@ -285,6 +285,7 @@ def data_process_scenarios(
     use_log=True,
     remove_history=False,
 ):
+    data_dict = {}
     # (agents_history, agents_future, agents_interested, agents_type, agents_id) = (
     #         data_process_agent(
     #             scenarios,
@@ -301,33 +302,51 @@ def data_process_scenarios(
         )
     )
     traj = scenarios.log_trajectory
+    NUM_AGENTS = scenarios.object_metadata.num_objects
     # past trajectory (context)
-    past_xy = jnp.stack(
-        [traj.x[..., :current_index], traj.y[..., :current_index]],
-        axis=-1,
-    )  # [B, N, T_hist, 2]
-
+    data_dict.update(
+        {
+            "context": jnp.stack(
+                [traj.x[..., :current_index], traj.y[..., :current_index]],
+                axis=-1,
+            ).reshape(
+                NUM_AGENTS, -1
+            )  # [N,T_hist*2]
+        }
+    )
     # future trajectory (target for diffusion)
-    future_xy = jnp.stack(
-        [traj.x[..., current_index:], traj.y[..., current_index:]],
-        axis=-1,
-    )  # [B, N, H, 2]
+    data_dict.update(
+        {
+            "gt_xy": jnp.stack(
+                [traj.x[..., current_index:], traj.y[..., current_index:]],
+                axis=-1,
+            ).reshape(
+                NUM_AGENTS, -1
+            )  # [N*H*2]
+        }
+    )
 
     # mask for valid objects
-    future_valid = traj.valid[..., current_index:]  # [B, N, H]
-
-    return {
-        "agents_type": scenarios.object_metadata.object_types,
-        "traffic_light_points": traffic_light_points,  # TODO for some reason tree collate is not failing
-        # "polylines": np.float32(polylines),
-        # "polylines_valid": np.int32(polylines_valid),
-        # "relations": np.float32(relations),
-        "traj": traj,
-        "future_valid": future_valid,
-        "past_xy": past_xy,
-        "future_xy": future_xy,
-        "scenario": None,
-    }
+    data_dict.update(
+        {
+            "gt_xy_mask": jnp.repeat(
+                traj.valid[..., current_index:, None], 2, axis=-1
+            ).reshape(
+                NUM_AGENTS, -1
+            )  # [N*H*2]
+        }
+    )
+    # data_dict.update({
+    #      "polylines": np.float32(polylines),
+    #     "polylines_valid": np.int32(polylines_valid),
+    #     "relations": np.float32(relations),
+    # })
+    data_dict.update(
+        {
+            "agents_type": scenarios.object_metadata.object_types,
+        }
+    )
+    return data_dict
 
 
 # @jax.jit
