@@ -1,0 +1,24 @@
+_target_: src.models.DiffusionAttentionModel
+seed: ${trainer.seed}
+load_last_checkpoint: ${trainer.load_last_checkpoint}
+cfg_metrics: ${metrics}
+grad_clip: ${trainer.gradient_clip_val}
+vis_cfg: ${visual}
+num_agents: 32
+time_len: 10
+num_feat: 2
+se_args:
+  rnn_type: "lstm" # one of "lstm" "mhsa"
+  rnn_num_heads: 1
+  sa_num_heads: 1
+  drop_attn: 0.1
+  mlp_dim: 10
+  num_mlp_layers: 2
+  num_agents: ${model.num_agents}
+  time_len: ${model.time_len}
+  num_feat: ${model.num_feat}
+sacamlp_args:
+num_saca_mlp:
+sacamlp2_args:
+num_sacamlp2:
+output_shape: [32, 81, 2]
