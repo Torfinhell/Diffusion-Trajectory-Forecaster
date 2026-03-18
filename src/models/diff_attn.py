@@ -12,32 +12,6 @@ from einops import rearrange, repeat
 from .base_model import BaseDiffusionModel
 
 
-class PositionalEncoding(eqx.Module):  # TODO
-
-    fc1: eqx.nn.Linear
-    fc2: eqx.nn.Linear
-    fc_out: eqx.nn.Linear
-    out_shape: tuple[int, ...]
-
-    def __init__(
-        self, hid_dim: int, input_shape: list[int], output_shape: list[int], key
-    ):
-        k1, k2, k3 = jr.split(key, 3)
-        traj_dim, cond_dim = prod(output_shape), prod(input_shape)
-        self.out_shape = output_shape
-        self.fc1 = eqx.nn.Linear(traj_dim + cond_dim + 1, hid_dim, key=k1)
-        self.fc2 = eqx.nn.Linear(hid_dim, hid_dim, key=k2)
-        self.fc_out = eqx.nn.Linear(hid_dim, traj_dim, key=k3)
-
-    def __call__(self, t, x_t, cond):
-        x = jnp.concatenate(
-            [x_t.reshape(-1), cond.reshape(-1), jnp.atleast_1d(t)], axis=0
-        )
-        x = jnn.relu(self.fc1(x))
-        x = jnn.relu(self.fc2(x))
-        return self.fc_out(x).reshape(self.out_shape)
-
-
 class SceneEncoder(eqx.Module):
     """
     input_tensor: (B, A, T, F)
@@ -46,9 +20,10 @@ class SceneEncoder(eqx.Module):
     rnn_full_dim=num_heads*rnn_dim
     """
 
-    # agent_pos_emb: PositionalEncoding #TODO
+    pos_emb_type: Literal["rope", "Trainable", "None"]  # for time
     rnn_time: eqx.nn.MultiheadAttention | eqx.nn.LSTMCell
     sa_agents: eqx.nn.MultiheadAttention
+    embedding: eqx.nn.Embedding | eqx.nn.RotaryPositionalEmbedding
     mlp: eqx.nn.MLP
     rnn_type: str
     dropout_key: jax.random.PRNGKey
@@ -65,9 +40,11 @@ class SceneEncoder(eqx.Module):
         time_len: int,
         num_feat: int,
         out_dim: int,
+        pos_emb_type: Literal["rope", "lookup", "None"],
+        rope_theta: float,
         key,
     ):
-        rnn_key, sa_key, mlp_key, self.dropout_key = jr.split(key, 4)
+        rnn_key, sa_key, mlp_key, self.dropout_key, embed_key = jr.split(key, 5)
         self.rnn_type = rnn_type
         in_dim = num_agents * num_feat
         rnn_dim = in_dim
@@ -99,11 +76,24 @@ class SceneEncoder(eqx.Module):
             out_size=out_dim,
             key=mlp_key,
         )
+        self.pos_emb_type = pos_emb_type
+        embedding_size = num_agents * num_feat
+        if self.pos_emb_type == "rope":
+            self.embedding = eqx.nn.RotaryPositionalEmbedding(
+                embedding_size=embedding_size, theta=rope_theta
+            )
+        elif self.pos_emb_type == "lookup":
+            self.embedding = eqx.nn.Embedding(
+                num_embeddings=time_len, embedding_size=embedding_size, key=embed_key
+            )
+        else:
+            self.embedding = None
 
     def __call__(self, x):  # (1, A, T, F)
         b, a, t, f = x.shape
         x = rearrange(x, "1 a t f -> t (a f)")  # (T, A*F)
         if isinstance(self.rnn_time, eqx.nn.LSTMCell):
+            assert not isinstance(self.embedding, eqx.nn.RotaryPositionalEmbedding)
 
             def scan_fn(state, xt):
                 new_state = self.rnn_time(
@@ -116,8 +106,29 @@ class SceneEncoder(eqx.Module):
                 jnp.zeros((self.rnn_time.hidden_size)),
             )
             _, x = jax.lax.scan(scan_fn, init_state, x)  # x: (T, A*F)
+            if isinstance(self.embedding, eqx.nn.Embedding):
+                x += self.embedding(jnp.arange(0, t))
         else:
-            x = self.rnn_time(x, x, x, key=self.dropout_key)  # mhsa
+            if isinstance(self.embedding, eqx.nn.RotaryPositionalEmbedding):
+
+                def process_heads(query_heads, key_heads, value_heads):
+                    query_heads = jax.vmap(self.embedding, in_axes=1, out_axes=1)(
+                        query_heads
+                    )
+                    key_heads = jax.vmap(self.embedding, in_axes=1, out_axes=1)(
+                        key_heads
+                    )
+
+                    return query_heads, key_heads, value_heads
+
+            else:
+                process_heads = None
+            x = self.rnn_time(
+                x, x, x, key=self.dropout_key, process_heads=process_heads
+            )  # mhsa
+            if isinstance(self.embedding, eqx.nn.Embedding):
+                x += jax.vmap(self.embedding)(jnp.arange(0, t))
+
         x = rearrange(x, "t (a f) -> a (t f)", a=a)
         x = self.sa_agents(x, x, x, key=self.dropout_key)
         return jax.vmap(lambda ag: self.mlp(ag))(x).reshape(a, -1)  # (1, A, out_dim)
