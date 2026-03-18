@@ -18,7 +18,7 @@ se_args:
   time_len: ${model.time_len}
   num_feat: ${model.num_feat}
   out_dim: 20
-  pos_emb_type: "None" #one of "rope", "lookup", "None"
+  pos_emb_type: "lookup" #one of "rope", "lookup", "None"
   rope_theta: 0.1
 samlp_args:
   attn_dim: 164 #2*(time_future+1)
