@@ -12,6 +12,21 @@ from einops import rearrange, repeat
 from .base_model import BaseDiffusionModel
 
 
+class FourierEmbedding(eqx.Module):
+    # mlp_out:eqx.nn.Linear
+    freqs: eqx.nn.Embedding
+    embed_dim: int
+
+    def __init__(self, embed_dim, key):
+        self.freqs = eqx.nn.Embedding(1, embed_dim // 2, key=key)
+        self.embed_dim = embed_dim
+
+    def __call__(self, x):  # x is scalar
+        return jnp.concat(
+            [jnp.cos(self.freqs.weight * x), jnp.sin(self.freqs.weight * x)], axis=-1
+        )[: self.embed_dim]
+
+
 class SceneEncoder(eqx.Module):
     """
     input_tensor: (B, A, T, F)
@@ -198,7 +213,9 @@ class DiffAttention(eqx.Module):
     out_shape: tuple[int, ...]
     ca_mlp_layers: list[AttentionMLP]
     sa_mlp_layers: list[AttentionMLP]
-    num_sa_mlp: int
+    embed_future: FourierEmbedding
+    embed_past: FourierEmbedding
+    mlp_out: eqx.nn.Linear
 
     def __init__(
         self,
@@ -211,9 +228,10 @@ class DiffAttention(eqx.Module):
         final_out_dim: int,
         key,
     ):
-        se_key, ca_mlp_key, sacamlp_key = jr.split(key, 3)
+        se_key, ca_mlp_key, sacamlp_key, out_key, fourier_key_1, fourier_key_2 = (
+            jr.split(key, 6)
+        )
         self.scene_encoder = SceneEncoder(**se_args, key=se_key)
-        self.num_sa_mlp = num_sa_mlp
         sacamlp_keys = jr.split(sacamlp_key, num_sa_mlp)
         self.sa_mlp_layers = [
             AttentionMLP(**samlp_args, key=sacamlp_key, type_attn="self")
@@ -222,27 +240,26 @@ class DiffAttention(eqx.Module):
         ca_mlp_keys = jr.split(ca_mlp_key, num_camlp)
         self.ca_mlp_layers = [
             AttentionMLP(**camlp_args, key=ca_mlp_key, type_attn="cross")
-            for _, ca_mlp_key in zip(range(num_camlp - 1), ca_mlp_keys[:-1])
+            for _, ca_mlp_key in zip(range(num_camlp), ca_mlp_keys[:-1])
         ]
-        if num_camlp > 1:
-            camlp_args["out_dim"] = final_out_dim
-            self.ca_mlp_layers.append(
-                AttentionMLP(**camlp_args, key=ca_mlp_key, type_attn="cross")
-            )
+        self.embed_future = FourierEmbedding(camlp_args["out_dim"], key=fourier_key_1)
+        self.embed_past = FourierEmbedding(se_args["out_dim"], key=fourier_key_2)
+        self.mlp_out = eqx.nn.Linear(
+            in_features=camlp_args["out_dim"], out_features=final_out_dim, key=out_key
+        )
         self.out_shape = out_shape
 
     def __call__(self, t_noise, x_t, cond):
         KV_cond = self.scene_encoder(cond)  # (1, A, out_dim)
         _, a, t, f = x_t.shape
-        x_t = jnp.concat(
-            [repeat(t_noise, " -> 1 a 1 f", a=a, f=f), x_t], axis=-2
-        ).reshape(a, -1)
+        x_t = jnp.concat([self.embed_future(t_noise), x_t.reshape(a, -1)], axis=-2)
+        KV_cond = jnp.concat([self.embed_past(t_noise), KV_cond], axis=-2)
         # x_t, _=jax.lax.scan(lambda input, layer_idx:(self.sa_mlp_layers[layer_idx](input), None), x_t.reshape(a, -1), jnp.arange(self.num_sa_mlp)) #TODO
         for layer in self.sa_mlp_layers:
             x_t = layer(x_t)
         for layer in self.ca_mlp_layers:
             x_t = layer(x_t, KV_cond)
-        return x_t.reshape(self.out_shape)
+        return jax.vmap(self.mlp_out)(x_t[:-1]).reshape(self.out_shape)
 
 
 class DiffusionAttentionModel(BaseDiffusionModel):
