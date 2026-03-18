@@ -213,3 +213,4 @@ outputs
 checkpoints
 data
 wandb
+data.zip
