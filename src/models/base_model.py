@@ -201,13 +201,7 @@ class BaseDiffusionModel(L.LightningModule):
             return
         self.metrics_train.reset()
         for batch in self._train_batches_for_metrics:
-            sample_steps = int(self.vis.get("sample_steps", 20))
-            pred_xy, _ = self.sample_multiple_sol(
-                batch["context"][0],
-                num_solutions=sample_steps,
-                predict_shape=batch["gt_xy"][0].shape,
-            )
-            self.metrics_train.update(pred_xy, batch["gt_xy"][0], batch["gt_xy_mask"][0])
+            self._update_metrics_for_batch(self.metrics_train, batch)
         vals = self.metrics_train.compute()
         log_dict = {f"Train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
         self.log_dict(log_dict, prog_bar=True)
@@ -224,27 +218,22 @@ class BaseDiffusionModel(L.LightningModule):
         images = []
         diffusion_video_frames = []
         self.metrics_val.reset()
-        for batch in self._val_batches_for_metrics:
-
-            # Visualize/evaluate first batch element only (consistent with batch_idx=0 below)
-            sample_steps = int(self.vis.get("sample_steps", 20))
-            pred_xy, pred_path = self.sample_multiple_sol(
-                batch["context"][0],
-                num_solutions=sample_steps,
-                predict_shape=batch["gt_xy"][0].shape,
+        for batch_idx, batch in enumerate(self._val_batches_for_metrics):
+            first_pred_xy, first_pred_path = self._update_metrics_for_batch(
+                self.metrics_val,
+                batch,
+                return_first_prediction=batch_idx == 0,
             )
 
-            self.metrics_val.update(pred_xy, batch["gt_xy"][0], batch["gt_xy_mask"][0])
-            if "scenario" in batch:
+            if batch_idx == 0 and "scenario" in batch and first_pred_xy is not None:
                 viz_state = batch["scenario"]
                 if viz_state is not None:
                     img = plot_simulator_state(
-                        viz_state, batch_idx=0, pred_xy=pred_xy, **self.vis
+                        viz_state, batch_idx=0, pred_xy=first_pred_xy, **self.vis
                     )
                     images.append(wandb.Image(img))
-                    # Build diffusion video on the first validation batch only.
-                    if len(diffusion_video_frames) == 0:
-                        pred_path_np = np.asarray(pred_path)
+                    if len(diffusion_video_frames) == 0 and first_pred_path is not None:
+                        pred_path_np = np.asarray(first_pred_path)
                         for s in range(pred_path_np.shape[0]):
                             frame = plot_simulator_state(
                                 viz_state,
@@ -289,6 +278,28 @@ class BaseDiffusionModel(L.LightningModule):
         }
         self.log_dict(log_dict, prog_bar=True)
         self._val_batches_for_metrics.clear()
+
+    def _update_metrics_for_batch(
+        self, metrics, batch, return_first_prediction=False
+    ):
+        first_pred_xy = None
+        first_pred_path = None
+        num_solutions = int(self.vis.get("sample_steps", 20))
+
+        for sample_idx in range(batch["gt_xy"].shape[0]):
+            pred_xy, pred_path = self.sample_multiple_sol(
+                batch["context"][sample_idx],
+                num_solutions=num_solutions,
+                predict_shape=batch["gt_xy"][sample_idx].shape,
+            )
+            metrics.update(
+                pred_xy, batch["gt_xy"][sample_idx], batch["gt_xy_mask"][sample_idx]
+            )
+            if return_first_prediction and sample_idx == 0:
+                first_pred_xy = pred_xy
+                first_pred_path = pred_path
+
+        return first_pred_xy, first_pred_path
 
     def sample_multiple_sol(
         self, context, num_solutions=20, predict_shape=None, save_full=False

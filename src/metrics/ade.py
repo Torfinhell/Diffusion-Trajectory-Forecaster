@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
-from .base import BaseMetric
+from .base import BaseMetric, temporal_valid_mask
 
 
 @dataclass
@@ -27,12 +27,12 @@ class AdeMetric(BaseMetric):
 
     def update(
         self,
-        pred_xy: jnp.ndarray,  # shape: (agents, H*2)
-        gt_xy: jnp.ndarray,  # shape: (agents, H*2)
-        gt_mask: jnp.ndarray | None,  # shape: (agents, H*2) or None
+        pred_xy: jnp.ndarray,  # shape: (agents, H, 2)
+        gt_xy: jnp.ndarray,  # shape: (agents, H, 2)
+        gt_mask: jnp.ndarray | None,  # shape: (agents, H) or (agents, H, 2)
     ) -> None:
         diff = pred_xy - gt_xy
         dist = jnp.sqrt(jnp.sum(diff**2, axis=-1))
-        mask = gt_mask[..., 0]
-        self.state.sum_error += jnp.sum(dist * mask.astype(jnp.float32))
-        self.state.count += jnp.sum(mask.astype(jnp.float32))
+        mask = temporal_valid_mask(gt_xy, gt_mask).astype(jnp.float32)
+        self.state.sum_error += jnp.sum(dist * mask)
+        self.state.count += jnp.sum(mask)

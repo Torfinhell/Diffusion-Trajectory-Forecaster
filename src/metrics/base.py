@@ -10,6 +10,23 @@ def traj_to_xy_valid(traj):
     return xy, valid
 
 
+def temporal_valid_mask(gt_xy, valid):
+    """Normalizes valid masks to shape (..., T)."""
+    if valid is None:
+        return jnp.ones(gt_xy.shape[:-1], dtype=jnp.bool_)
+
+    valid = jnp.asarray(valid)
+    if valid.shape == gt_xy.shape[:-1]:
+        return valid.astype(jnp.bool_)
+    if valid.shape == gt_xy.shape:
+        return jnp.all(valid.astype(jnp.bool_), axis=-1)
+
+    raise ValueError(
+        "Expected valid mask with shape matching gt_xy[..., :-1] or gt_xy, "
+        f"got {valid.shape} for gt_xy {gt_xy.shape}."
+    )
+
+
 class BaseMetric:
     def __init__(self, name):
         self.name = name
