@@ -48,6 +48,8 @@ class BaseDiffusionModel(L.LightningModule):
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
         self.val_metric_batches = 3
         self._val_batches_for_metrics = []
+        self.train_metric_batches = 3
+        self._train_batches_for_metrics = []
         self.metrics_prefix = "Val"
         self.model = self.get_model(key_model)
         self.configure_ddpm_scheduler()
@@ -94,6 +96,8 @@ class BaseDiffusionModel(L.LightningModule):
         )
         dict_ = {"loss": torch.scalar_tensor(loss_value)}
         self.global_step_ += 1
+        if len(self._train_batches_for_metrics) < self.train_metric_batches:
+            self._train_batches_for_metrics.append(batch)
         return dict_
 
     def validation_step(self, batch):
@@ -192,11 +196,29 @@ class BaseDiffusionModel(L.LightningModule):
             Path.mkdir(f"checkpoints/ScoreBased", parents=True, exist_ok=True)
         eqx.tree_serialise_leaves(f"checkpoints/ScoreBased/last.eqx", self.model)
 
+    def on_train_epoch_end(self) -> None:
+        if len(self.metrics_train) == 0 or len(self._train_batches_for_metrics) == 0:
+            return
+        self.metrics_train.reset()
+        for batch in self._train_batches_for_metrics:
+            sample_steps = int(self.vis.get("sample_steps", 20))
+            pred_xy, _ = self.sample_multiple_sol(
+                batch["context"][0],
+                num_solutions=sample_steps,
+                predict_shape=batch["gt_xy"][0].shape,
+            )
+            self.metrics_train.update(pred_xy, batch["gt_xy"][0], batch["gt_xy_mask"][0])
+        vals = self.metrics_train.compute()
+        log_dict = {f"Train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
+        self.log_dict(log_dict, prog_bar=True)
+        print(f"[Train metrics] epoch={self.current_epoch}  " + "  ".join(f"{k}={v:.4f}" for k, v in log_dict.items()))
+        self._train_batches_for_metrics.clear()
+
     def on_validation_epoch_end(self) -> None:
         if not Path(f"checkpoints/ScoreBased").exists():
             Path.mkdir(f"checkpoints/ScoreBased", parents=True, exist_ok=True)
         eqx.tree_serialise_leaves(f"checkpoints/ScoreBased/last.eqx", self.model)
-        if self.metrics_val is None:
+        if len(self.metrics_val) == 0 or len(self._val_batches_for_metrics) == 0:
             return
 
         images = []
@@ -268,7 +290,6 @@ class BaseDiffusionModel(L.LightningModule):
         self.log_dict(log_dict, prog_bar=True)
         self._val_batches_for_metrics.clear()
 
-    @eqx.filter_jit
     def sample_multiple_sol(
         self, context, num_solutions=20, predict_shape=None, save_full=False
     ):
@@ -290,11 +311,9 @@ class BaseDiffusionModel(L.LightningModule):
             save_full,
             kk,
         )[0]
-        pred_paths = jax.vmap(sample_one)(sample_keys)  # [S, N, DIM]
-        final_pred = pred_paths[
-            -1
-        ]  # TODO choose best path by some criteria(maybe take the mean of the paths)
-        return final_pred, pred_paths  # [S, N, DIM]
+        pred_paths = jax.vmap(sample_one)(sample_keys)  # [S, *data_shape]
+        final_pred = jnp.mean(pred_paths, axis=0)       # mean over samples → [*data_shape]
+        return final_pred, pred_paths
 
     @eqx.filter_jit
     def sample_one_sol(

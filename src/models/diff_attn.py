@@ -21,10 +21,10 @@ class FourierEmbedding(eqx.Module):
         self.freqs = eqx.nn.Embedding(1, embed_dim // 2, key=key)
         self.embed_dim = embed_dim
 
-    def __call__(self, x):  # x is scalar
+    def __call__(self, x):  # x is scalar -> (embed_dim,)
         return jnp.concat(
             [jnp.cos(self.freqs.weight * x), jnp.sin(self.freqs.weight * x)], axis=-1
-        )[: self.embed_dim]
+        ).squeeze(0)[: self.embed_dim]
 
 
 class SceneEncoder(eqx.Module):
@@ -250,16 +250,15 @@ class DiffAttention(eqx.Module):
         self.out_shape = out_shape
 
     def __call__(self, t_noise, x_t, cond):
-        KV_cond = self.scene_encoder(cond)  # (1, A, out_dim)
+        KV_cond = self.scene_encoder(cond)  # (A, out_dim)
         _, a, t, f = x_t.shape
-        x_t = jnp.concat([self.embed_future(t_noise), x_t.reshape(a, -1)], axis=-2)
-        KV_cond = jnp.concat([self.embed_past(t_noise), KV_cond], axis=-2)
-        # x_t, _=jax.lax.scan(lambda input, layer_idx:(self.sa_mlp_layers[layer_idx](input), None), x_t.reshape(a, -1), jnp.arange(self.num_sa_mlp)) #TODO
+        x_t = x_t.reshape(a, -1) + self.embed_future(t_noise)   # (A, dim) + (dim,)
+        KV_cond = KV_cond + self.embed_past(t_noise)             # (A, out_dim) + (out_dim,)
         for layer in self.sa_mlp_layers:
             x_t = layer(x_t)
         for layer in self.ca_mlp_layers:
             x_t = layer(x_t, KV_cond)
-        return jax.vmap(self.mlp_out)(x_t[:-1]).reshape(self.out_shape)
+        return jax.vmap(self.mlp_out)(x_t).reshape(self.out_shape)
 
 
 class DiffusionAttentionModel(BaseDiffusionModel):
