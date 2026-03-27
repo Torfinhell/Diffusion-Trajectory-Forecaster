@@ -13,6 +13,20 @@ from waymax import config, dataloader
 from .data_process import data_process_scenarios
 
 
+def _strip_leading_batch_axis(sample):
+    cleaned = {}
+    for key, value in sample.items():
+        if key == "scenario":
+            cleaned[key] = value
+            continue
+        arr = jnp.asarray(value)
+        if arr.ndim > 0 and arr.shape[0] == 1:
+            cleaned[key] = jnp.squeeze(arr, axis=0)
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
 class DiffusionTrackerDataset(Dataset):
     GLOBAL_ITER = None
     TRAIN_DIR = 0
@@ -52,6 +66,7 @@ class DiffusionTrackerDataset(Dataset):
         if download_folder is not None and download_path.exists():
             with open(download_path, "rb") as file:
                 self.data = pickle.load(file)
+            self.data = [_strip_leading_batch_axis(sample) for sample in self.data]
             # if not extract_scene:
             #     for i, state in enumerate(self.data):
             #         batched_scenario = jax.tree_util.tree_map(
@@ -73,15 +88,19 @@ class DiffusionTrackerDataset(Dataset):
                     )
                     if not extract_scene:
                         self.data.append(
-                            data_process_scenarios(
-                                batched_scenario, **extract_data_conf
+                            _strip_leading_batch_axis(
+                                data_process_scenarios(
+                                    batched_scenario, **extract_data_conf
+                                )
                             )
                         )
                     else:
                         self.data.append({"scenario": state})
                         self.data[-1].update(
-                            data_process_scenarios(
-                                batched_scenario, **extract_data_conf
+                            _strip_leading_batch_axis(
+                                data_process_scenarios(
+                                    batched_scenario, **extract_data_conf
+                                )
                             )
                         )
 

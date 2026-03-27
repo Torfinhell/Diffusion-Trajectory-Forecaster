@@ -3,6 +3,8 @@ import jax.numpy as jnp
 import tensorflow as tf
 from waymax import dataloader, datatypes
 
+COORD_SCALE = 1.0
+
 # def wrap_to_pi(angle):
 #     """
 #     Wrap an angle to the range [-pi, pi].
@@ -303,22 +305,42 @@ def data_process_scenarios(
         )
     )
     traj = scenarios.log_trajectory
+    context_xy = jnp.stack(
+        [traj.x[..., :current_index], traj.y[..., :current_index]],
+        axis=-1,
+    )
+    context_valid = traj.valid[..., :current_index, None]
+    gt_xy = jnp.stack(
+        [traj.x[..., current_index:], traj.y[..., current_index:]],
+        axis=-1,
+    )
+    gt_valid = traj.valid[..., current_index:, None]
+
+    history_valid = traj.valid[..., :current_index]
+    history_idx = jnp.arange(current_index, dtype=jnp.int32)
+    last_valid_idx = jnp.max(jnp.where(history_valid, history_idx, -1), axis=-1)
+    has_history = last_valid_idx >= 0
+    safe_last_valid_idx = jnp.maximum(last_valid_idx, 0)
+    origin_xy = jnp.take_along_axis(
+        traj.xy[..., :current_index, :],
+        safe_last_valid_idx[..., None, None],
+        axis=-2,
+    )
+    origin_xy = jnp.where(has_history[..., None, None], origin_xy, 0.0)
     # past trajectory (context)
     data_dict.update(
         {
-            "context": jnp.stack(
-                [traj.x[..., :current_index], traj.y[..., :current_index]],
-                axis=-1,
-            )  # [N,T_hist,2]
+            "context": jnp.where(context_valid, context_xy - origin_xy, 0.0)
+            / COORD_SCALE
         }
     )
     # future trajectory (target for diffusion)
     data_dict.update(
         {
-            "gt_xy": jnp.stack(
-                [traj.x[..., current_index:], traj.y[..., current_index:]],
-                axis=-1,
-            )  # [N,H,2]
+            "gt_xy": jnp.where(
+                gt_valid & has_history[..., None, None], gt_xy - origin_xy, 0.0
+            )
+            / COORD_SCALE
         }
     )
 
@@ -326,7 +348,9 @@ def data_process_scenarios(
     data_dict.update(
         {
             "gt_xy_mask": jnp.repeat(
-                traj.valid[..., current_index:, None], 2, axis=-1
+                (traj.valid[..., current_index:, None] & has_history[..., None, None]),
+                2,
+                axis=-1,
             )  # [N,H,2]
         }
     )
@@ -338,6 +362,8 @@ def data_process_scenarios(
     data_dict.update(
         {
             "agents_type": scenarios.object_metadata.object_types,
+            "origin_xy": origin_xy,
+            "coord_scale": jnp.full(origin_xy.shape[:-1] + (1,), COORD_SCALE),
         }
     )
     return data_dict

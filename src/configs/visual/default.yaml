@@ -1,4 +1,4 @@
-# passed to your plot_simulator_state(...)
+# passed to plot_simulator_state(...)
 use_log_traj: true
 highlight_obj: SDC
 plot_all_trajectories: true
@@ -9,6 +9,12 @@ pred_linestyle: "-"
 pred_clip_to_view: true
 gt_linewidth: 0.85
 pred_raw_plot: true
+debug_metrics: true
+debug_denoiser_scale: true
+direct_prediction_eval: false
+sample_steps: 1
+enable_visualization: true
+enable_train_visualization: true
 
 # passed into Waymax VizConfig(**viz_config)
 viz_config:

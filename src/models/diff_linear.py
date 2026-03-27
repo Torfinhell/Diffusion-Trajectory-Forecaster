@@ -36,11 +36,19 @@ class DiffDenoiser(eqx.Module):
 
 class DiffusionLinearModel(BaseDiffusionModel):
     def __init__(
-        self, hid_dim, input_shape: list[int], output_shape: list[int], **kwargs
+        self,
+        hid_dim,
+        input_shape: list[int],
+        output_shape: list[int],
+        lr=2e-3,
+        lr_scheduler=None,
+        **kwargs,
     ):
         self.hid_dim = hid_dim
         self.input_shape = input_shape
         self.output_shape = output_shape
+        self.lr = lr
+        self.lr_scheduler_cfg = lr_scheduler or {"name": "none"}
         super().__init__(**kwargs)
 
     def get_model(self, key_model):
@@ -52,11 +60,12 @@ class DiffusionLinearModel(BaseDiffusionModel):
         )
 
     def configure_optimizers(self):
-        self.optim = optax.adam(3e-4)
+        self.optim = optax.adam(self.build_learning_rate(self.lr))
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
 
     def configure_ddpm_scheduler(self):
         self.int_beta = lambda t: t
         self.weight = lambda t: 1 - jnp.exp(-self.int_beta(t))
-        self.t1 = 10.0
-        self.dt0 = 0.1
+        self.t0 = 1e-3
+        self.t1 = 5.0
+        self.dt0 = 0.01

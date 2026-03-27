@@ -1,5 +1,5 @@
 defaults:
-  - model: diffusion_attn
+  - model: diffusion_attn_2x
   - dataloaders: basic
   - datasets: basic
   - transforms: null
@@ -8,15 +8,15 @@ defaults:
   - visual: default
   - _self_
 trainer:
-  num_epochs: 100
-  train_epoch_len: 100
-  val_epoch_len: 10
-  gradient_clip_val: 6.0
+  num_epochs: 230
+  train_epoch_len: 1
+  val_epoch_len: 1
+  gradient_clip_val: 5.0
   log_every_n_steps: 10
   seed: 1
   val_batches: 4
   samples_per_scene: 1
-  generate_every_epoch: 1
+  generate_every_epoch: 0
   print_hparams: True
   logging: "offline"
   load_last_checkpoint: False

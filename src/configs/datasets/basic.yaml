@@ -9,13 +9,13 @@ train:
   max_num_objects: 32
   download_folder: "data/dataset/train"
   # download_folder: null
-  extract_scene: False
+  extract_scene: True
   extract_data_conf: ${datasets.extract_data}
 val:
   _target_: src.data_module.dataset.DiffusionTrackerDataset
   waymax_conf_version: WOD_1_3_1_TRAINING
   gs_path: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000"
-  num_states: 10
+  num_states: 1
   max_num_objects: 32
   download_folder: "data/dataset/val"
   # download_folder: null

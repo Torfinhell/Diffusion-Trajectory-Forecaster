@@ -4,12 +4,12 @@ load_last_checkpoint: ${trainer.load_last_checkpoint}
 cfg_metrics: ${metrics}
 grad_clip: ${trainer.gradient_clip_val}
 vis_cfg: ${visual}
-prediction_target: score
+prediction_target: x0
 lr: 1e-3
 lr_scheduler:
   name: cosine
   decay_steps: 230
-  end_lr: 7e-4
+  end_lr: 5e-4
 oracle_cfg:
   use_for_train_loss: false
   use_for_val_loss: false
@@ -21,34 +21,34 @@ time_len: 10
 num_feat: 2
 se_args:
   rnn_type: "mhsa" # one of "lstm" "mhsa"
-  rnn_num_heads: 1
-  sa_num_heads: 1
+  rnn_num_heads: 4
+  sa_num_heads: 4
   drop_attn: 0.1
-  mlp_dim: 30
-  num_mlp_layers: 2
+  mlp_dim: 120
+  num_mlp_layers: 8
   num_agents: ${model.num_agents}
   time_len: ${model.time_len}
   num_feat: ${model.num_feat}
-  out_dim: 20
-  pos_emb_type: "lookup" #one of "rope", "lookup", "None"
+  out_dim: 80
+  pos_emb_type: "lookup" # one of "rope", "lookup", "None"
   rope_theta: 0.1
 samlp_args:
-  attn_dim: 162 #2*(time_future+1)
-  attn_num_heads: 1
-  mlp_dim: 30
-  num_mlp_layers: 1
+  attn_dim: 162 # 2*(time_future+1)
+  attn_num_heads: 2
+  mlp_dim: 120
+  num_mlp_layers: 4
   drop_attn: 0.1
   out_dim: 162
-num_sa_mlp: 1
+num_sa_mlp: 4
 camlp_args:
-  attn_dim: 162 #2*(time_future+1)
-  attn_num_heads: 1
-  mlp_dim: 30
-  num_mlp_layers: 1
+  attn_dim: 162 # 2*(time_future+1)
+  attn_num_heads: 2
+  mlp_dim: 120
+  num_mlp_layers: 4
   drop_attn: 0.1
   out_dim: 162
-  kv_dim: 20
-num_camlp: 2
+  kv_dim: 80
+num_camlp: 8
 output_shape: [32, 81, 2]
 fourier_num_freqs: 81
 final_out_dim: 162

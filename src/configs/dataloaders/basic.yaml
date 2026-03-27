@@ -1,6 +1,6 @@
 train:
   _target_: torch.utils.data.DataLoader
-  batch_size: 5
+  batch_size: 10
   num_workers: 0
   pin_memory: True
   shuffle: False
