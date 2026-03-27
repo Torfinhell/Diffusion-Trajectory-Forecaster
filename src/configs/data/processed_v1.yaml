@@ -1,0 +1,11 @@
+# @package _global_
+data:
+  train:
+    dvc_file: "data/train_processed_v1.pkl.dvc"
+    processed_path: "data/train_processed_v1.pkl"
+  val:
+    dvc_file: "data/val_processed_v1.pkl.dvc"
+    processed_path: "data/val_processed_v1.pkl"
+  test:
+    dvc_file: "data/test_processed_v1.pkl.dvc"
+    processed_path: "data/test_processed_v1.pkl"

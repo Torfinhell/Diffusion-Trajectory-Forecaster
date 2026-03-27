@@ -1,0 +1,4 @@
+defaults:
+  - data: processed_v1
+  - dataset_creation: default
+  - _self_

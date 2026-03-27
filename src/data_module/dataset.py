@@ -1,120 +1,30 @@
-import dataclasses
 import pickle
+import subprocess
 from pathlib import Path
-from typing import Optional
 
-import jax
-import jax.numpy as jnp
-from hydra.utils import instantiate
+from hydra.utils import to_absolute_path
 from torch.utils.data import Dataset
-from tqdm.auto import tqdm
-from waymax import config, dataloader
-
-from .data_process import data_process_scenarios
-
-
-def _strip_leading_batch_axis(sample):
-    cleaned = {}
-    for key, value in sample.items():
-        if key == "scenario":
-            cleaned[key] = value
-            continue
-        arr = jnp.asarray(value)
-        if arr.ndim > 0 and arr.shape[0] == 1:
-            cleaned[key] = jnp.squeeze(arr, axis=0)
-        else:
-            cleaned[key] = value
-    return cleaned
 
 
 class DiffusionTrackerDataset(Dataset):
-    GLOBAL_ITER = None
-    TRAIN_DIR = 0
-
-    def __init__(
-        self,
-        waymax_conf_version: str,
-        gs_path: str,
-        num_states: Optional[int] = None,
-        download_folder: Optional[str] = None,
-        max_num_objects: Optional[int] = None,
-        extract_scene=False,
-        extract_data_conf=None,
-    ):
+    def __init__(self, processed_path: str, dvc_file: str | None = None):
         super().__init__()
-        if self.__class__.GLOBAL_ITER is None:
-            waymax_config = getattr(config, waymax_conf_version)
-            waymax_config = dataclasses.replace(
-                waymax_config,
-                path=f"{gs_path}",
-                max_num_objects=max_num_objects,
-            )
-            self.__class__.GLOBAL_ITER = dataloader.simulator_state_generator(
-                config=waymax_config
-            )
-        self.data = []
-        if download_folder is not None:
-            download_folder = Path(download_folder)
-            if "train" in str(download_folder):
-                download_path = (
-                    download_folder / f"states_{self.__class__.TRAIN_DIR}.pkl"
+        dataset_path = Path(to_absolute_path(processed_path))
+        if not dataset_path.exists():
+            if dvc_file is None:
+                raise FileNotFoundError(
+                    f"Processed dataset not found at {dataset_path} and no dvc_file was provided."
                 )
-                self.__class__.TRAIN_DIR += 1
-            else:
-                download_path = download_folder / "states.pkl"
-            download_path.parent.mkdir(parents=True, exist_ok=True)
-        if download_folder is not None and download_path.exists():
-            with open(download_path, "rb") as file:
-                self.data = pickle.load(file)
-            self.data = [_strip_leading_batch_axis(sample) for sample in self.data]
-            # if not extract_scene:
-            #     for i, state in enumerate(self.data):
-            #         batched_scenario = jax.tree_util.tree_map(
-            #             lambda x: x[None, ...], state["scenario"]
-            #         )
-            #         self.data[i] = data_process_scenarios(
-            #             batched_scenario, **extract_data_conf
-            #         )
-            #         self.data[i].update(state)
-            print(f"Downloaded states from {download_path}")
-        else:
-            for ind in tqdm(
-                range(num_states), total=num_states, desc="Downloading states..."
-            ):
-                try:
-                    state = next(self.__class__.GLOBAL_ITER)
-                    batched_scenario = jax.tree_util.tree_map(
-                        lambda x: x[None, ...], state
-                    )
-                    if not extract_scene:
-                        self.data.append(
-                            _strip_leading_batch_axis(
-                                data_process_scenarios(
-                                    batched_scenario, **extract_data_conf
-                                )
-                            )
-                        )
-                    else:
-                        self.data.append({"scenario": state})
-                        self.data[-1].update(
-                            _strip_leading_batch_axis(
-                                data_process_scenarios(
-                                    batched_scenario, **extract_data_conf
-                                )
-                            )
-                        )
+            print(f"Processed dataset not found at {dataset_path}. Pulling with DVC.")
+            try:
+                subprocess.run(["dvc", "pull", dvc_file], check=True)
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "Could not run `dvc pull` because the `dvc` CLI is not installed."
+                ) from exc
 
-                except Exception as e:
-                    print(
-                        f"Iteration through states finished with exception {e} \n"
-                        f"at ind: {ind}, and max number of states: {num_states} \n"
-                        f"gs_path is {gs_path}"
-                    )
-                    break
-            if download_folder is not None:
-                with open(download_path, "wb") as file:
-                    pickle.dump(self.data, file)
-                print(f"Downloaded states to {download_path}")
+        with dataset_path.open("rb") as file:
+            self.data = pickle.load(file)
 
     def __getitem__(self, key):
         return self.data[key]

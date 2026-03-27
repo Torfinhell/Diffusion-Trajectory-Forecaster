@@ -1,7 +1,7 @@
 defaults:
-  - model: diffusion_model
+  - model: diffusion_linear
   - dataloaders: basic
-  - datasets: basic
+  - data: processed_v1
   - transforms: null
   - logger: wandb
   - metrics: all_metrics

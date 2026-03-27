@@ -208,9 +208,7 @@ __marimo__/
 uv.lock
 experiments
 .vscode
-data
 outputs
 checkpoints
-data
 wandb
 data.zip

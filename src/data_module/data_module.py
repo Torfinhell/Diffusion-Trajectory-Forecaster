@@ -3,30 +3,36 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 from jax.tree_util import tree_map
 
+from src.data_module.dataset import DiffusionTrackerDataset
+
 
 def tree_collate(states):
     return tree_map(lambda *xs: jnp.stack(xs, axis=0), *states)
 
 
 class DiffusionTrackerDataModule(L.LightningDataModule):
-    def __init__(self, cfg_ds, cfg_dl, **kwargs):
+    def __init__(self, cfg_data, cfg_dl, **kwargs):
         super().__init__()
-        self.cfg_ds = cfg_ds
+        self.cfg_data = cfg_data
         self.cfg_dl = cfg_dl
 
+    def _dataset(self, split):
+        split_cfg = self.cfg_data[split]
+        return DiffusionTrackerDataset(
+            processed_path=split_cfg.processed_path,
+            dvc_file=split_cfg.dvc_file,
+        )
+
     def setup(self, stage):
-        if stage == "fit":
-            if getattr(self.cfg_ds, "val", None) is not None:
-                self.val_dataset = instantiate(self.cfg_ds.val)
+        if stage in (None, "fit"):
+            self.val_dataset = self._dataset("val")
         elif stage == "test":
-            if getattr(self.cfg_ds, "test", None) is not None:
-                self.test_dataset = instantiate(self.cfg_ds.test)
+            self.test_dataset = self._dataset("test")
         else:
             raise NotImplementedError("Didnt implement not fit stage")
 
     def train_dataloader(self):
-        if getattr(self.cfg_ds, "train", None) is not None:
-            self.train_dataset = instantiate(self.cfg_ds.train)
+        self.train_dataset = self._dataset("train")
         return instantiate(
             self.cfg_dl.train,
             collate_fn=tree_collate,

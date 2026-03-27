@@ -1,7 +1,7 @@
 defaults:
   - model: diffusion_attn_2x
   - dataloaders: basic
-  - datasets: basic
+  - data: processed_v1
   - transforms: null
   - logger: wandb
   - metrics: all_metrics
@@ -9,7 +9,7 @@ defaults:
   - _self_
 trainer:
   num_epochs: 230
-  train_epoch_len: 1
+  train_epoch_len: 10
   val_epoch_len: 1
   gradient_clip_val: 5.0
   log_every_n_steps: 10

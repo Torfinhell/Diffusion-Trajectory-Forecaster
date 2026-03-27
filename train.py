@@ -11,7 +11,7 @@ from src.utils import process_hparams
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=True)
     logger = instantiate(hparams.logger)
-    dm = DiffusionTrackerDataModule(hparams.datasets, hparams.dataloaders)
+    dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
     progress_bar = RichProgressBar(leave=True)
     trainer = Trainer(
         accelerator="auto",

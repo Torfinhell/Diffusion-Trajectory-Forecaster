@@ -3,7 +3,7 @@ train:
   batch_size: 10
   num_workers: 0
   pin_memory: True
-  shuffle: False
+  shuffle: True
 val:
   _target_: torch.utils.data.DataLoader
   batch_size: 5
