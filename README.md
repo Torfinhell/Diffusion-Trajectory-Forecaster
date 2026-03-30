@@ -133,3 +133,44 @@ You can still override individual settings with Hydra, for example:
 uv run python create_dataset.py dataset_creation.train.num_states=100
 uv run python create_dataset.py dataset_creation.val.max_num_objects=16
 ```
+
+### Config guide
+The project uses Hydra configs from `src/configs/`. The script you run decides which config groups are read.
+
+`train.py`:
+- root config: `src/configs/ddpm_baseline.yaml`
+- alternative training preset: `src/configs/ddpm_1.yaml`
+- config groups used by training:
+- `model=...`: model class and model-specific hyperparameters such as architecture size, diffusion settings, learning rate, oracle settings, and checkpoint loading
+- `data=...`: which processed dataset artifact is used for train/val/test, including the `.pkl` paths and matching `.dvc` file
+- `dataloaders=...`: batch size, shuffle, workers, and other `DataLoader` settings
+- `logger=...`: experiment logger backend and W&B project/run settings
+- `metrics=...`: train/validation metrics instantiated during training
+- `visual=...`: visualization and sampling/debug rendering settings used by the model during validation/logging
+- `trainer.*`: top-level training loop settings such as epochs, train/val epoch length, gradient clipping, seed, logging mode, and checkpoint reload flag
+
+Examples:
+```bash
+uv run python train.py
+uv run python train.py data=processed_v2
+uv run python train.py model=diffusion_attn_2x trainer.num_epochs=230
+```
+
+`create_dataset.py`:
+- root config: `src/configs/create_dataset.yaml`
+- config groups used for dataset creation:
+- `data=...`: where the generated dataset is written and which `.dvc` file is updated
+- `dataset_creation=...`: how the dataset is generated from raw Waymo data for each split
+
+Inside `dataset_creation=...`, each split (`train`, `val`, `test`) controls:
+- `raw_data_url`: source TFRecord shard(s)
+- `waymax_conf_version`: Waymo/Waymax dataset version
+- `num_states`: how many scenes to process
+- `max_num_objects`: scene filtering limit before preprocessing
+- `extract_scene`: whether to extract scene data
+- `preprocessing.*`: preprocessing parameters such as object cap, polyline limits, current index, point count, log transform, and history removal
+
+Rule of thumb:
+- change `data=...` when you want a different saved dataset artifact
+- change `dataset_creation=...` when you want different dataset contents
+- change `model=...`, `trainer.*`, `dataloaders.*`, `metrics`, `logger`, or `visual` when you want different training behavior
