@@ -212,3 +212,4 @@ outputs
 checkpoints
 wandb
 data.zip
+.docker-cache/

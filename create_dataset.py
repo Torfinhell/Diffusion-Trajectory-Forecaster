@@ -44,6 +44,32 @@ def _require_cli(name):
         )
 
 
+def _validate_shared_dataset_layout(processed_paths, dvc_files):
+    dataset_dirs = {path.parent for path in processed_paths}
+    if len(dataset_dirs) != 1:
+        raise RuntimeError(
+            "Expected all processed split outputs to live in the same directory, got: "
+            + ", ".join(str(path) for path in sorted(dataset_dirs, key=str))
+        )
+
+    if len(dvc_files) != 1:
+        raise RuntimeError(
+            "Expected all splits to reference the same DVC file, got: "
+            + ", ".join(str(path) for path in sorted(dvc_files, key=str))
+        )
+
+    dataset_dir = next(iter(dataset_dirs))
+    dvc_file = next(iter(dvc_files))
+    expected_dvc_file = dataset_dir.with_name(dataset_dir.name + ".dvc")
+    if dvc_file != expected_dvc_file:
+        raise RuntimeError(
+            f"Configured dvc file {dvc_file} does not match the directory artifact "
+            f"created by `dvc add {dataset_dir}` ({expected_dvc_file})."
+        )
+
+    return dataset_dir, dvc_file
+
+
 @hydra.main(version_base=None, config_path="src/configs", config_name="create_dataset")
 def main(cfg) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -52,11 +78,15 @@ def main(cfg) -> None:
     repo_root = _repo_root()
     _require_cli("dvc")
     _require_cli("git")
+    processed_paths = []
+    dvc_files = set()
     for split in ("train", "val", "test"):
         artifact_cfg = cfg.data[split]
         creation_cfg = cfg.dataset_creation[split]
         processed_path = _resolve_repo_path(artifact_cfg.processed_path)
         dvc_file = _resolve_repo_path(artifact_cfg.dvc_file)
+        processed_paths.append(processed_path)
+        dvc_files.add(dvc_file)
 
         LOGGER.info("Creating %s split from raw data", split)
         samples = create_processed_samples(
@@ -76,22 +106,22 @@ def main(cfg) -> None:
         )
         save_processed_samples(processed_path, samples)
 
-        LOGGER.info("Tracking %s split with DVC", split)
-        _run_logged(["dvc", "add", str(processed_path)], cwd=repo_root)
+    dataset_dir, dvc_file = _validate_shared_dataset_layout(processed_paths, dvc_files)
 
-        expected_dvc_file = processed_path.with_name(processed_path.name + ".dvc")
-        if dvc_file != expected_dvc_file:
-            LOGGER.warning(
-                "Configured dvc file %s does not match the default file created by `dvc add` (%s).",
-                dvc_file,
-                expected_dvc_file,
-            )
+    LOGGER.info("Tracking processed dataset directory with DVC: %s", dataset_dir)
+    _run_logged(["dvc", "add", str(dataset_dir.relative_to(repo_root))], cwd=repo_root)
 
-        LOGGER.info("Adding %s split DVC metadata to git", split)
-        _run_logged(
-            ["git", "add", str(dvc_file.relative_to(repo_root)), ".gitignore"],
-            cwd=repo_root,
-        )
+    gitignore_path = dataset_dir.parent / ".gitignore"
+    LOGGER.info("Adding shared DVC metadata to git")
+    _run_logged(
+        [
+            "git",
+            "add",
+            str(dvc_file.relative_to(repo_root)),
+            str(gitignore_path.relative_to(repo_root)),
+        ],
+        cwd=repo_root,
+    )
 
     LOGGER.info("Pushing tracked datasets to the default DVC remote")
     _run_logged(["dvc", "push"], cwd=repo_root)

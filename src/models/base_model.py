@@ -21,6 +21,9 @@ from src.visualization.viz import plot_simulator_state
 
 
 class BaseDiffusionModel(L.LightningModule):
+    CHECKPOINT_DIR = Path("checkpoints/ScoreBased")
+    CHECKPOINT_PATH = CHECKPOINT_DIR / "last.eqx"
+
     def __init__(
         self,
         seed,
@@ -405,16 +408,15 @@ class BaseDiffusionModel(L.LightningModule):
         if self.load_last_checkpoint:
             try:
                 self.model = eqx.tree_deserialise_leaves(
-                    f"checkpoints/ScoreBased/last.eqx", self.model
+                    self.CHECKPOINT_PATH, self.model
                 )
                 print("Loaded weights")
             except:
                 print("Didnt load weights")
 
     def on_fit_end(self):
-        if not Path(f"checkpoints/ScoreBased").exists():
-            Path.mkdir(f"checkpoints/ScoreBased", parents=True, exist_ok=True)
-        eqx.tree_serialise_leaves(f"checkpoints/ScoreBased/last.eqx", self.model)
+        self._save_local_checkpoint()
+        self._log_model_artifact()
 
     def on_train_epoch_end(self) -> None:
         if len(self.metrics_train) == 0 or len(self._train_batches_for_metrics) == 0:
@@ -590,9 +592,7 @@ class BaseDiffusionModel(L.LightningModule):
         )
 
     def on_validation_epoch_end(self) -> None:
-        if not Path(f"checkpoints/ScoreBased").exists():
-            Path.mkdir(f"checkpoints/ScoreBased", parents=True, exist_ok=True)
-        eqx.tree_serialise_leaves(f"checkpoints/ScoreBased/last.eqx", self.model)
+        self._save_local_checkpoint()
         if len(self.metrics_val) == 0 or len(self._val_batches_for_metrics) == 0:
             return
 
@@ -683,6 +683,28 @@ class BaseDiffusionModel(L.LightningModule):
         }
         self.log_dict(log_dict, prog_bar=True)
         self._val_batches_for_metrics.clear()
+
+    def _save_local_checkpoint(self) -> None:
+        self.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        eqx.tree_serialise_leaves(self.CHECKPOINT_PATH, self.model)
+
+    def _log_model_artifact(self) -> None:
+        logger = getattr(self, "logger", None)
+        experiment = getattr(logger, "experiment", None)
+        if experiment is None:
+            return
+
+        artifact_name = f"{experiment.project}-model"
+        if getattr(experiment, "name", None):
+            artifact_name = f"{artifact_name}-{experiment.name}"
+
+        artifact = wandb.Artifact(artifact_name, type="model")
+        artifact.add_file(str(self.CHECKPOINT_PATH), name="last.eqx")
+        artifact.metadata = {
+            "epoch": int(self.current_epoch),
+            "global_step": int(self.global_step),
+        }
+        experiment.log_artifact(artifact)
 
     def _update_metrics_for_batch(
         self, metrics, batch, return_first_prediction=False
