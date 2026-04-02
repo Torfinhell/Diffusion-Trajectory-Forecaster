@@ -63,15 +63,21 @@ Processed datasets are tracked with DVC as directory artifacts. Git stores the `
 
 Remote configuration:
 - keep the remote URL in `.dvc/config`
-- keep secrets such as `gdrive_client_id` and `gdrive_client_secret` in `.dvc/config.local`
+- keep credentials such as `access_key_id` and `secret_access_key` in `.dvc/config.local`
 - do not commit `.dvc/config.local`
 
-Typical local setup:
+Amazon S3 credentials setup:
 ```bash
 uv run dvc remote list
-uv run dvc remote modify --local myremote gdrive_client_id <YOUR_CLIENT_ID>
-uv run dvc remote modify --local myremote gdrive_client_secret <YOUR_CLIENT_SECRET>
+uv run dvc remote modify --local myremote access_key_id <AWS_ACCESS_KEY_ID>
+uv run dvc remote modify --local myremote secret_access_key <AWS_SECRET_ACCESS_KEY>
 ```
+
+Notes:
+- the shared repository config already defines the default DVC remote URL and region
+- the AWS identity used by DVC should have `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`
+- if the bucket uses SSE-KMS encryption, the same identity also needs the matching KMS permissions
+- if AWS CLI is already configured on the machine, DVC can also reuse that configuration
 
 Pull datasets on a new machine:
 ```bash
@@ -90,10 +96,6 @@ Push updated artifacts:
 uv run dvc push
 ```
 
-Recommended workflow with Docker:
-- run `dvc pull` and `dvc push` on the host, not inside Docker
-- run training and evaluation inside Docker
-- this avoids repeating the Google Drive browser login flow inside the container
 
 Useful checks:
 ```bash

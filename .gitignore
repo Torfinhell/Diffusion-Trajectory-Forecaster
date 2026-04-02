@@ -213,3 +213,5 @@ checkpoints
 wandb
 data.zip
 .docker-cache/
+
+secret/
