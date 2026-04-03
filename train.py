@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import hydra
-import wandb
 import yaml
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate, to_absolute_path
@@ -42,24 +41,21 @@ def _dataset_metadata(cfg) -> dict:
     return metadata
 
 
-def _log_wandb_run_metadata(logger, cfg) -> None:
-    experiment = getattr(logger, "experiment", None)
-    if experiment is None:
+def _log_run_metadata(logger, cfg) -> None:
+    if logger is None:
         return
 
     runtime_choices = dict(HydraConfig.get().runtime.choices)
     dataset_name = runtime_choices.get("data")
-    dataset_info = {
-        "name": dataset_name,
-        "splits": _dataset_metadata(cfg),
-    }
-    experiment.config.update(
-        {
-            "hydra_choices": runtime_choices,
-            "dataset": dataset_info,
+    metadata = {
+        "hydra_choices": runtime_choices,
+        "dataset": {
+            "name": dataset_name,
+            "splits": _dataset_metadata(cfg),
         },
-        allow_val_change=True,
-    )
+    }
+    if hasattr(logger, "log_run_metadata"):
+        logger.log_run_metadata(metadata)
 
     resolved_config_path = Path("resolved_config.yaml")
     resolved_config_path.write_text(
@@ -67,19 +63,19 @@ def _log_wandb_run_metadata(logger, cfg) -> None:
         encoding="utf-8",
     )
 
-    artifact = wandb.Artifact(
-        f"{experiment.project}-config-{experiment.id}",
-        type="config",
-    )
-    artifact.add_file(str(resolved_config_path), name="resolved_config.yaml")
-    experiment.log_artifact(artifact)
+    if hasattr(logger, "upload_artifact"):
+        logger.upload_artifact(
+            name=f"{getattr(logger, 'name', 'run')}-config",
+            path=resolved_config_path,
+            metadata=metadata,
+        )
 
 
 @hydra.main(version_base=None, config_name="ddpm_baseline", config_path="src/configs")
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=True)
     logger = instantiate(hparams.logger)
-    _log_wandb_run_metadata(logger, hparams)
+    _log_run_metadata(logger, hparams)
     dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
     progress_bar = RichProgressBar(leave=True)
     trainer = Trainer(

@@ -13,7 +13,6 @@ import torch
 from hydra.utils import instantiate
 from PIL import Image
 
-import wandb
 from mocked_model import OracleDiffusionModel
 from src.data_module import data_process_scenarios
 from src.metrics import MetricCollection
@@ -239,6 +238,24 @@ class BaseDiffusionModel(L.LightningModule):
     def _to_metric_frame(pred_xy, coord_scale):
         return pred_xy * coord_scale
 
+    def _log_images(self, key, images):
+        logger = getattr(self, "logger", None)
+        if logger is None or not hasattr(logger, "log_image"):
+            return
+        logger.log_image(key=key, images=images, step=int(self.global_step))
+
+    def _log_video(self, key, path):
+        logger = getattr(self, "logger", None)
+        if logger is None or not hasattr(logger, "log_video"):
+            return
+        logger.log_video(key=key, path=path, step=int(self.global_step))
+
+    def _upload_artifact(self, name, path, metadata=None):
+        logger = getattr(self, "logger", None)
+        if logger is None or not hasattr(logger, "upload_artifact"):
+            return
+        logger.upload_artifact(name=name, path=path, metadata=metadata)
+
     @staticmethod
     def _mask_pred_for_plot(pred_xy, gt_xy_mask):
         pred_xy = jnp.asarray(pred_xy)
@@ -461,7 +478,7 @@ class BaseDiffusionModel(L.LightningModule):
                         pred_xy=first_pred_xy_world,
                         **plot_vis_kwargs,
                     )
-                    train_images.append(wandb.Image(img))
+                    train_images.append(img)
         vals = self.metrics_train.compute()
         log_dict = {f"Train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
         if len(denoise_metric_vals) > 0:
@@ -470,10 +487,7 @@ class BaseDiffusionModel(L.LightningModule):
             )
         self.log_dict(log_dict, prog_bar=True)
         if enable_train_visualization and len(train_images) > 0:
-            self.logger.log_image(
-                key="Train scenarios and predictions",
-                images=train_images,
-            )
+            self._log_images("Train scenarios and predictions", train_images)
         print(f"[Train metrics] epoch={self.current_epoch}  " + "  ".join(f"{k}={v:.4f}" for k, v in log_dict.items()))
         self._train_batches_for_metrics.clear()
 
@@ -628,7 +642,7 @@ class BaseDiffusionModel(L.LightningModule):
                         pred_xy=first_pred_xy_world,
                         **plot_vis_kwargs,
                     )
-                    images.append(wandb.Image(img))
+                    images.append(img)
                     if len(diffusion_video_frames) == 0 and first_pred_path is not None:
                         first_pred_path_plot = self._mask_pred_for_plot(
                             first_pred_path, batch["gt_xy_mask"][0]
@@ -648,10 +662,7 @@ class BaseDiffusionModel(L.LightningModule):
                             )
                             diffusion_video_frames.append(frame)
         if enable_visualization and "scenario" in batch and len(images) > 0:
-            self.logger.log_image(
-                key="Scenarios and predictions",
-                images=images,
-            )
+            self._log_images("Scenarios and predictions", images)
         if enable_visualization and len(diffusion_video_frames) > 0:
             video_np = np.stack(diffusion_video_frames, axis=0).astype(
                 np.uint8
@@ -667,15 +678,7 @@ class BaseDiffusionModel(L.LightningModule):
                 duration=max(1, int(1000 / int(self.vis.get("sample_video_fps", 6)))),
                 loop=0,
             )
-            self.logger.experiment.log(
-                {
-                    "Diffusion trajectory video": wandb.Video(
-                        str(gif_path),
-                        fps=int(self.vis.get("sample_video_fps", 6)),
-                        format="gif",
-                    )
-                }
-            )
+            self._log_video("Diffusion trajectory video", gif_path)
 
         vals = self.metrics_val.compute()
         log_dict = {
@@ -690,21 +693,22 @@ class BaseDiffusionModel(L.LightningModule):
 
     def _log_model_artifact(self) -> None:
         logger = getattr(self, "logger", None)
-        experiment = getattr(logger, "experiment", None)
-        if experiment is None:
+        if logger is None:
             return
 
-        artifact_name = f"{experiment.project}-model"
-        if getattr(experiment, "name", None):
-            artifact_name = f"{artifact_name}-{experiment.name}"
+        artifact_name = f"{getattr(logger, 'name', 'model')}-model"
+        version = getattr(logger, "version", None)
+        if version:
+            artifact_name = f"{artifact_name}-{version}"
 
-        artifact = wandb.Artifact(artifact_name, type="model")
-        artifact.add_file(str(self.CHECKPOINT_PATH), name="last.eqx")
-        artifact.metadata = {
-            "epoch": int(self.current_epoch),
-            "global_step": int(self.global_step),
-        }
-        experiment.log_artifact(artifact)
+        self._upload_artifact(
+            name=artifact_name,
+            path=self.CHECKPOINT_PATH,
+            metadata={
+                "epoch": int(self.current_epoch),
+                "global_step": int(self.global_step),
+            },
+        )
 
     def _update_metrics_for_batch(
         self, metrics, batch, return_first_prediction=False

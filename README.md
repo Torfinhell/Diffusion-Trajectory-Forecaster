@@ -146,10 +146,25 @@ The project uses Hydra configs from `src/configs/`. The script you run decides w
 - `model=...`: model class and model-specific hyperparameters such as architecture size, diffusion settings, learning rate, oracle settings, and checkpoint loading
 - `data=...`: which processed dataset artifact is used for train/val/test, including the `.pkl` paths and matching `.dvc` file
 - `dataloaders=...`: batch size, shuffle, workers, and other `DataLoader` settings
-- `logger=...`: experiment logger backend and W&B project/run settings
+- `logger=...`: experiment logger backend and ClearML project/run settings
 - `metrics=...`: train/validation metrics instantiated during training
 - `visual=...`: visualization and sampling/debug rendering settings used by the model during validation/logging
 - `trainer.*`: top-level training loop settings such as epochs, train/val epoch length, gradient clipping, seed, logging mode, and checkpoint reload flag
+
+ClearML setup:
+- initialize ClearML credentials once with `uv run clearml-init`
+- default logger config: `src/configs/logger/clearml.yaml`
+- `logger.project_name`: shared ClearML project for a family of experiments
+- `logger.task_name`: individual run name shown in ClearML
+- recommended pattern: keep one fixed `logger.project_name` and override `logger.task_name` per run
+
+Examples:
+```bash
+uv run clearml-init
+uv run python train.py logger.project_name=my_experiments logger.task_name=exp_001
+uv run python train.py logger.project_name=my_experiments logger.task_name=attn_v2_lr1e-4
+uv run python train.py logger.task_name=baseline_processed_v2
+```
 
 Examples:
 ```bash

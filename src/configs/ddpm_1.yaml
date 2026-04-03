@@ -3,7 +3,7 @@ defaults:
   - dataloaders: basic
   - data: processed_v2
   - transforms: null
-  - logger: wandb
+  - logger: clearml
   - metrics: all_metrics
   - visual: default
   - _self_
