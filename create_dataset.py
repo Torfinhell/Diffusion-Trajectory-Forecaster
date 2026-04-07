@@ -7,12 +7,13 @@ import hydra
 from hydra.utils import get_original_cwd, to_absolute_path
 
 from src.data_module.dataset_creation import (
-    create_processed_samples,
+    iter_processed_samples,
     save_processed_samples,
 )
 
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_FLUSH_EVERY = 512
 
 
 def _repo_root() -> Path:
@@ -80,6 +81,8 @@ def main(cfg) -> None:
     _require_cli("git")
     processed_paths = []
     dvc_files = set()
+    flush_every = int(getattr(cfg, "flush_every", DEFAULT_FLUSH_EVERY))
+
     for split in ("train", "val", "test"):
         artifact_cfg = cfg.data[split]
         creation_cfg = cfg.dataset_creation[split]
@@ -89,7 +92,7 @@ def main(cfg) -> None:
         dvc_files.add(dvc_file)
 
         LOGGER.info("Creating %s split from raw data", split)
-        samples = create_processed_samples(
+        samples = iter_processed_samples(
             raw_data_url=creation_cfg.raw_data_url,
             waymax_conf_version=creation_cfg.waymax_conf_version,
             num_states=creation_cfg.num_states,
@@ -99,12 +102,12 @@ def main(cfg) -> None:
         )
 
         LOGGER.info(
-            "Saving %s processed %s samples to %s",
-            len(samples),
+            "Streaming %s split samples to %s with flush_every=%s",
             split,
             processed_path,
+            flush_every,
         )
-        save_processed_samples(processed_path, samples)
+        save_processed_samples(processed_path, samples, flush_every=flush_every)
 
     dataset_dir, dvc_file = _validate_shared_dataset_layout(processed_paths, dvc_files)
 
