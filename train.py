@@ -79,7 +79,7 @@ def main(cfg) -> None:
     dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
     progress_bar = RichProgressBar(leave=True)
     trainer = Trainer(
-        accelerator="auto",
+        accelerator="gpu",
         max_epochs=hparams.trainer.num_epochs,
         logger=logger,
         callbacks=[progress_bar],

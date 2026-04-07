@@ -13,7 +13,10 @@ import torch
 from hydra.utils import instantiate
 from PIL import Image
 
-from mocked_model import OracleDiffusionModel
+try:
+    from mocked_model import OracleDiffusionModel
+except ImportError:
+    OracleDiffusionModel = None
 from src.data_module import data_process_scenarios
 from src.metrics import MetricCollection
 from src.visualization.viz import plot_simulator_state
@@ -212,6 +215,10 @@ class BaseDiffusionModel(L.LightningModule):
         return bool(self.oracle_cfg is not None and self.oracle_cfg.get(key, False))
 
     def _make_oracle_model(self, gt_xy):
+        if OracleDiffusionModel is None:
+            raise RuntimeError(
+                "Oracle mode requested but mocked_model.py is not available."
+            )
         return OracleDiffusionModel(gt_xy=gt_xy, int_beta=self.int_beta)
 
     def _oracle_sampling_mode(self):
@@ -417,7 +424,7 @@ class BaseDiffusionModel(L.LightningModule):
         std = jnp.sqrt(var)
         noise = jr.normal(key, INPUT_DIM)
         y = mean + std * noise
-        if isinstance(model, OracleDiffusionModel):
+        if OracleDiffusionModel is not None and isinstance(model, OracleDiffusionModel):
             if prediction_target == "x0":
                 pred = batch["gt_xy"]
             elif prediction_target == "epsilon":

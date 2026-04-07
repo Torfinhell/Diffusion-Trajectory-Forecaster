@@ -110,6 +110,18 @@ class SceneEncoder(eqx.Module):
         elif x.ndim != 4:
             raise ValueError(f"SceneEncoder expected 3D or 4D input, got {x.shape}")
         b, a, t, f = x.shape
+        expected_in_dim = (
+            self.rnn_time.input_size
+            if isinstance(self.rnn_time, eqx.nn.LSTMCell)
+            else self.rnn_time.query_size
+        )
+        actual_in_dim = a * f
+        if actual_in_dim != expected_in_dim:
+            raise ValueError(
+                "SceneEncoder input shape mismatch: expected A*F="
+                f"{expected_in_dim} from model config, got A*F={actual_in_dim} "
+                f"(A={a}, F={f}). Align model.num_agents/num_feat with dataset preprocessing."
+            )
         x = rearrange(x, "1 a t f -> t (a f)")  # (T, A*F)
         if isinstance(self.rnn_time, eqx.nn.LSTMCell):
             assert not isinstance(self.embedding, eqx.nn.RotaryPositionalEmbedding)

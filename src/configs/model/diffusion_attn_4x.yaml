@@ -17,7 +17,7 @@ oracle_cfg:
   use_for_sampling: false
   sampling_mode: exact
   sampling_t0: 0.001
-num_agents: 32
+num_agents: 64
 time_len: 10
 num_feat: 2
 se_args:
@@ -50,6 +50,6 @@ camlp_args:
   out_dim: 162
   kv_dim: 80
 num_camlp: 8
-output_shape: [32, 81, 2]
+output_shape: [64, 81, 2]
 fourier_num_freqs: 81
 final_out_dim: 162
