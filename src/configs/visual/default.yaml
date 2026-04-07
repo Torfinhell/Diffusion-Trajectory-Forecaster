@@ -9,12 +9,13 @@ pred_linestyle: "-"
 pred_clip_to_view: true
 gt_linewidth: 0.85
 pred_raw_plot: true
-debug_metrics: true
-debug_denoiser_scale: true
+debug_metrics: false
+debug_denoiser_scale: false
 direct_prediction_eval: false
+num_trajectory_samples: 1
 sample_steps: 1
 enable_visualization: true
-enable_train_visualization: true
+enable_train_visualization: false
 
 # passed into Waymax VizConfig(**viz_config)
 viz_config:

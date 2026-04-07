@@ -30,6 +30,7 @@ class BaseDiffusionModel(L.LightningModule):
         cfg_metrics,
         grad_clip,
         vis_cfg,
+        trainer_cfg=None,
         oracle_cfg=None,
         prediction_target="x0",
         **kwargs,
@@ -43,6 +44,7 @@ class BaseDiffusionModel(L.LightningModule):
         )
         self.metrics = cfg_metrics
         self.vis = vis_cfg
+        self.trainer_cfg = trainer_cfg or {}
         self.grad_clip = grad_clip
         self.load_last_checkpoint = load_last_checkpoint
         self.oracle_cfg = oracle_cfg or {}
@@ -52,9 +54,11 @@ class BaseDiffusionModel(L.LightningModule):
             [instantiate(m) for m in self.metrics.train]
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
-        self.val_metric_batches = 3
+        self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
         self._val_batches_for_metrics = []
-        self.train_metric_batches = 3
+        self.train_metric_batches = int(
+            self.trainer_cfg.get("train_metric_batches", 3)
+        )
         self._train_batches_for_metrics = []
         self.metrics_prefix = "Val"
         self._shape_debug_printed = False
@@ -151,7 +155,10 @@ class BaseDiffusionModel(L.LightningModule):
         )
         dict_ = {"loss": torch.scalar_tensor(loss_value)}
         self.global_step_ += 1
-        if len(self._train_batches_for_metrics) < self.train_metric_batches:
+        if (
+            self._should_run_metrics_this_epoch("train")
+            and len(self._train_batches_for_metrics) < self.train_metric_batches
+        ):
             self._train_batches_for_metrics.append(batch)
         return dict_
 
@@ -173,6 +180,7 @@ class BaseDiffusionModel(L.LightningModule):
         # collect some first batches to compute metrics on
         if (
             self.metrics is not None
+            and self._should_run_metrics_this_epoch("val")
             and len(self._val_batches_for_metrics) < self.val_metric_batches
         ):
             self._val_batches_for_metrics.append(batch)
@@ -222,6 +230,7 @@ class BaseDiffusionModel(L.LightningModule):
         excluded = {
             "debug_metrics",
             "debug_denoiser_scale",
+            "num_trajectory_samples",
             "sample_steps",
             "sample_video_fps",
             "enable_visualization",
@@ -249,6 +258,22 @@ class BaseDiffusionModel(L.LightningModule):
         if logger is None or not hasattr(logger, "log_video"):
             return
         logger.log_video(key=key, path=path, step=int(self.global_step))
+
+    def _metric_every_n_epochs(self, split):
+        key = f"{split}_metric_every_n_epochs"
+        return max(1, int(self.trainer_cfg.get(key, 1)))
+
+    def _should_run_metrics_this_epoch(self, split):
+        every_n = self._metric_every_n_epochs(split)
+        return (int(self.current_epoch) + 1) % every_n == 0
+
+    def _num_metric_trajectory_samples(self):
+        return int(
+            self.vis.get(
+                "num_trajectory_samples",
+                self.vis.get("sample_steps", 1),
+            )
+        )
 
     def _upload_artifact(self, name, path, metadata=None):
         logger = getattr(self, "logger", None)
@@ -436,6 +461,9 @@ class BaseDiffusionModel(L.LightningModule):
         self._log_model_artifact()
 
     def on_train_epoch_end(self) -> None:
+        if not self._should_run_metrics_this_epoch("train"):
+            self._train_batches_for_metrics.clear()
+            return
         if len(self.metrics_train) == 0 or len(self._train_batches_for_metrics) == 0:
             return
         enable_train_visualization = bool(
@@ -607,6 +635,9 @@ class BaseDiffusionModel(L.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         self._save_local_checkpoint()
+        if not self._should_run_metrics_this_epoch("val"):
+            self._val_batches_for_metrics.clear()
+            return
         if len(self.metrics_val) == 0 or len(self._val_batches_for_metrics) == 0:
             return
 
@@ -715,7 +746,7 @@ class BaseDiffusionModel(L.LightningModule):
     ):
         first_pred_xy = None
         first_pred_path = None
-        num_solutions = int(self.vis.get("sample_steps", 1))
+        num_solutions = self._num_metric_trajectory_samples()
         debug_metrics = bool(self.vis.get("debug_metrics", False))
 
         for sample_idx in range(batch["gt_xy"].shape[0]):

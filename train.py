@@ -87,6 +87,7 @@ def main(cfg) -> None:
         enable_progress_bar=True,
         limit_train_batches=hparams.trainer.train_epoch_len,
         limit_val_batches=hparams.trainer.val_epoch_len,
+        check_val_every_n_epoch=hparams.trainer.check_val_every_n_epoch,
         reload_dataloaders_every_n_epochs=cfg.trainer.generate_every_epoch,
     )
     diff_model = instantiate(

@@ -8,15 +8,19 @@ defaults:
   - visual: default
   - _self_
 trainer:
-  num_epochs: 230
-  train_epoch_len: 10
-  val_epoch_len: 1
+  num_epochs: 100
+  train_epoch_len: 1.0
+  val_epoch_len: 1.0
   gradient_clip_val: 5.0
   log_every_n_steps: 10
   seed: 1
-  val_batches: 4
+  train_metric_batches: 1
+  val_metric_batches: 1
+  train_metric_every_n_epochs: 20
+  val_metric_every_n_epochs: 20
+  check_val_every_n_epoch: 1
   samples_per_scene: 1
   generate_every_epoch: 0
-  print_hparams: True
-  logging: "offline"
+  print_hparams: False
+  logging: "online"
   load_last_checkpoint: False
