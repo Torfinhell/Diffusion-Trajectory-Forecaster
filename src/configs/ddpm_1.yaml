@@ -1,7 +1,7 @@
 defaults:
   - model: diffusion_attn_2x
   - dataloaders: basic
-  - data: processed_v2
+  - data: baseline1
   - transforms: null
   - logger: clearml
   - metrics: all_metrics

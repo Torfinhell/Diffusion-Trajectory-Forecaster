@@ -515,7 +515,10 @@ class BaseDiffusionModel(L.LightningModule):
             )
         self.log_dict(log_dict, prog_bar=True)
         if enable_train_visualization and len(train_images) > 0:
-            self._log_images("Train scenarios and predictions", train_images)
+            self._log_images(
+                f"Train scenarios and predictions/epoch_{self.current_epoch}",
+                train_images,
+            )
         print(f"[Train metrics] epoch={self.current_epoch}  " + "  ".join(f"{k}={v:.4f}" for k, v in log_dict.items()))
         self._train_batches_for_metrics.clear()
 
@@ -693,7 +696,10 @@ class BaseDiffusionModel(L.LightningModule):
                             )
                             diffusion_video_frames.append(frame)
         if enable_visualization and "scenario" in batch and len(images) > 0:
-            self._log_images("Scenarios and predictions", images)
+            self._log_images(
+                f"Scenarios and predictions/epoch_{self.current_epoch}",
+                images,
+            )
         if enable_visualization and len(diffusion_video_frames) > 0:
             video_np = np.stack(diffusion_video_frames, axis=0).astype(
                 np.uint8
@@ -709,7 +715,10 @@ class BaseDiffusionModel(L.LightningModule):
                 duration=max(1, int(1000 / int(self.vis.get("sample_video_fps", 6)))),
                 loop=0,
             )
-            self._log_video("Diffusion trajectory video", gif_path)
+            self._log_video(
+                f"Diffusion trajectory video/epoch_{self.current_epoch}",
+                gif_path,
+            )
 
         vals = self.metrics_val.compute()
         log_dict = {
