@@ -215,3 +215,6 @@ data.zip
 .docker-cache/
 
 secret/
+data/*/*
+!data/dataset/
+resolved_config.yaml

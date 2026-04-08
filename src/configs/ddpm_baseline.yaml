@@ -25,3 +25,4 @@ trainer:
   print_hparams: True
   logging: "offline"
   load_last_checkpoint: False
+  enable_profiler: False

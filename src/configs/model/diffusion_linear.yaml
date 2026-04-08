@@ -6,11 +6,6 @@ grad_clip: ${trainer.gradient_clip_val}
 vis_cfg: ${visual}
 trainer_cfg: ${trainer}
 prediction_target: x0
-lr: 2e-3
-lr_scheduler:
-  name: none
-  decay_steps: 20000
-  end_lr: 1e-5
 oracle_cfg:
   use_for_train_loss: false
   use_for_val_loss: false
