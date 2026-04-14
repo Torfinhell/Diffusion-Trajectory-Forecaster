@@ -1,7 +1,7 @@
 defaults:
-  - model: diffusion_attn
-  - dataloaders: big_baseline
-  - data: big_baseline
+  - model: diffusion_attn_2x
+  - dataloaders: basic
+  - data: small_base_wo_vis
   - transforms: null
   - logger: clearml
   - metrics: all_metrics
@@ -24,4 +24,5 @@ trainer:
   print_hparams: False
   logging: "online"
   load_last_checkpoint: False
+
   enable_profiler: False

@@ -1,0 +1,11 @@
+# @package _global_
+data:
+  train:
+    dvc_file: "data/small_base_wo_vis.dvc"
+    processed_path: "data/small_base_wo_vis/train_small_base_wo_vis.pkl"
+  val:
+    dvc_file: "data/small_base_wo_vis.dvc"
+    processed_path: "data/small_base_wo_vis/val_small_base_wo_vis.pkl"
+  test:
+    dvc_file: "data/small_base_wo_vis.dvc"
+    processed_path: "data/small_base_wo_vis/test_small_base_wo_vis.pkl"

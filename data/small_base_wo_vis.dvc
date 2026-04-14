@@ -1,0 +1,6 @@
+outs:
+- md5: c06d4ddafda6349a87245db661d843a5.dir
+  size: 67354477
+  nfiles: 3
+  hash: md5
+  path: small_base_wo_vis

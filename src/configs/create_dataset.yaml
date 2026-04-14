@@ -4,3 +4,4 @@ defaults:
   - _self_
 
 flush_every: 512
+storage_format: directory_chunks

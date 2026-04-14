@@ -2,6 +2,7 @@ import dataclasses
 import logging
 import pickle
 import shutil
+import struct
 from pathlib import Path
 
 import jax
@@ -14,6 +15,9 @@ from .data_process import data_process_scenarios
 
 LOGGER = logging.getLogger(__name__)
 CHUNKED_DATASET_FORMAT = "diffusion_tracker_chunked_v1"
+SINGLE_FILE_CHUNKED_DATASET_FORMAT = "diffusion_tracker_single_file_chunked_v1"
+SINGLE_FILE_INDEX_MAGIC = b"DTDSIDX1"
+SINGLE_FILE_INDEX_TRAILER = struct.Struct("<Q8s")
 
 
 def _strip_leading_batch_axis(sample):
@@ -57,6 +61,11 @@ def iter_processed_samples(
         try:
             state = next(iterator)
         except Exception as exc:
+            if index == 0:
+                raise RuntimeError(
+                    "Dataset creation failed before producing the first sample. "
+                    f"raw_data_url={raw_data_url}, waymax_conf_version={waymax_conf_version}"
+                ) from exc
             LOGGER.warning(
                 "Stopped dataset creation after %s/%s states: %s",
                 index,
@@ -74,12 +83,9 @@ def iter_processed_samples(
         yield processed
 
 
-def save_processed_samples(processed_path, samples, flush_every=512):
+def _save_processed_samples_as_directory_chunks(processed_path, samples, flush_every):
     processed_path = Path(processed_path)
     processed_path.parent.mkdir(parents=True, exist_ok=True)
-    if flush_every <= 0:
-        raise ValueError("flush_every must be a positive integer.")
-
     chunk_dir = processed_path.parent / f"{processed_path.name}.chunks"
     if chunk_dir.exists():
         shutil.rmtree(chunk_dir)
@@ -120,3 +126,76 @@ def save_processed_samples(processed_path, samples, flush_every=512):
     with processed_path.open("wb") as file:
         pickle.dump(manifest, file)
     return processed_path
+
+
+def _save_processed_samples_as_single_file(processed_path, samples, flush_every):
+    processed_path = Path(processed_path)
+    processed_path.parent.mkdir(parents=True, exist_ok=True)
+    chunk_dir = processed_path.parent / f"{processed_path.name}.chunks"
+    if chunk_dir.exists():
+        shutil.rmtree(chunk_dir)
+
+    chunk = []
+    chunk_offsets = []
+    chunk_sizes = []
+    total_samples = 0
+
+    with processed_path.open("wb") as file:
+
+        def _flush_chunk(items):
+            nonlocal total_samples
+            chunk_offsets.append(file.tell())
+            pickle.dump(items, file, protocol=pickle.HIGHEST_PROTOCOL)
+            chunk_sizes.append(len(items))
+            total_samples += len(items)
+            file.flush()
+
+        for sample in samples:
+            chunk.append(sample)
+            if len(chunk) >= flush_every:
+                _flush_chunk(chunk)
+                chunk = []
+
+        if chunk:
+            _flush_chunk(chunk)
+
+        index_offset = file.tell()
+        index = {
+            "format": SINGLE_FILE_CHUNKED_DATASET_FORMAT,
+            "chunk_offsets": chunk_offsets,
+            "chunk_sizes": chunk_sizes,
+            "num_samples": total_samples,
+        }
+        pickle.dump(index, file, protocol=pickle.HIGHEST_PROTOCOL)
+        file.write(SINGLE_FILE_INDEX_TRAILER.pack(index_offset, SINGLE_FILE_INDEX_MAGIC))
+        file.flush()
+
+    return processed_path
+
+
+def save_processed_samples(
+    processed_path,
+    samples,
+    flush_every=512,
+    storage_format="directory_chunks",
+):
+    if flush_every <= 0:
+        raise ValueError("flush_every must be a positive integer.")
+
+    storage_format = str(storage_format).lower()
+    if storage_format in {"directory_chunks", "chunked", "chunks"}:
+        return _save_processed_samples_as_directory_chunks(
+            processed_path,
+            samples,
+            flush_every,
+        )
+    if storage_format in {"single_file", "single_pkl", "streamed_single_file"}:
+        return _save_processed_samples_as_single_file(
+            processed_path,
+            samples,
+            flush_every,
+        )
+    raise ValueError(
+        "Unsupported storage_format. "
+        "Use one of: directory_chunks, chunked, chunks, single_file, single_pkl, streamed_single_file."
+    )

@@ -1,4 +1,5 @@
 import logging
+import pickle
 import shutil
 import subprocess
 from pathlib import Path
@@ -7,6 +8,10 @@ import hydra
 from hydra.utils import get_original_cwd, to_absolute_path
 
 from src.data_module.dataset_creation import (
+    CHUNKED_DATASET_FORMAT,
+    SINGLE_FILE_CHUNKED_DATASET_FORMAT,
+    SINGLE_FILE_INDEX_MAGIC,
+    SINGLE_FILE_INDEX_TRAILER,
     iter_processed_samples,
     save_processed_samples,
 )
@@ -71,6 +76,30 @@ def _validate_shared_dataset_layout(processed_paths, dvc_files):
     return dataset_dir, dvc_file
 
 
+def _read_num_samples(processed_path: Path) -> int:
+    with processed_path.open("rb") as file:
+        file.seek(0, 2)
+        file_size = file.tell()
+        trailer_size = SINGLE_FILE_INDEX_TRAILER.size
+        if file_size >= trailer_size:
+            file.seek(file_size - trailer_size)
+            index_offset, magic = SINGLE_FILE_INDEX_TRAILER.unpack(file.read(trailer_size))
+            if magic == SINGLE_FILE_INDEX_MAGIC:
+                file.seek(index_offset)
+                loaded = pickle.load(file)
+                if loaded.get("format") == SINGLE_FILE_CHUNKED_DATASET_FORMAT:
+                    return int(loaded.get("num_samples", 0))
+
+    with processed_path.open("rb") as file:
+        loaded = pickle.load(file)
+
+    if isinstance(loaded, list):
+        return len(loaded)
+    if isinstance(loaded, dict) and loaded.get("format") == CHUNKED_DATASET_FORMAT:
+        return int(loaded.get("num_samples", 0))
+    raise RuntimeError(f"Unsupported dataset format at {processed_path}")
+
+
 @hydra.main(version_base=None, config_path="src/configs", config_name="create_dataset")
 def main(cfg) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -82,6 +111,7 @@ def main(cfg) -> None:
     processed_paths = []
     dvc_files = set()
     flush_every = int(getattr(cfg, "flush_every", DEFAULT_FLUSH_EVERY))
+    storage_format = str(getattr(cfg, "storage_format", "directory_chunks"))
 
     for split in ("train", "val", "test"):
         artifact_cfg = cfg.data[split]
@@ -102,12 +132,24 @@ def main(cfg) -> None:
         )
 
         LOGGER.info(
-            "Streaming %s split samples to %s with flush_every=%s",
+            "Streaming %s split samples to %s with flush_every=%s storage_format=%s",
             split,
             processed_path,
             flush_every,
+            storage_format,
         )
-        save_processed_samples(processed_path, samples, flush_every=flush_every)
+        save_processed_samples(
+            processed_path,
+            samples,
+            flush_every=flush_every,
+            storage_format=storage_format,
+        )
+        num_samples = _read_num_samples(processed_path)
+        if num_samples <= 0:
+            raise RuntimeError(
+                f"Created empty {split} dataset at {processed_path}. "
+                "Dataset creation stopped before producing any samples."
+            )
 
     dataset_dir, dvc_file = _validate_shared_dataset_layout(processed_paths, dvc_files)
 
