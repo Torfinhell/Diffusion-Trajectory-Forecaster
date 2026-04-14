@@ -9,7 +9,6 @@ import jax.random as jr
 import numpy as np
 import optax
 import pytorch_lightning as L
-import torch
 from hydra.utils import instantiate
 from PIL import Image
 
@@ -57,6 +56,10 @@ class BaseDiffusionModel(L.LightningModule):
             [instantiate(m) for m in self.metrics.train]
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
+        self._train_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+        self._train_loss_count = 0
+        self._val_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+        self._val_loss_count = 0
         self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
         self._val_batches_for_metrics = []
         self.train_metric_batches = int(
@@ -126,67 +129,57 @@ class BaseDiffusionModel(L.LightningModule):
         raise ValueError(f"Unsupported lr scheduler '{name}'")
 
     def training_step(self, batch):
-        if not self._shape_debug_printed:
-            self._debug_training_shapes(batch)
-            self._shape_debug_printed = True
-        if self._oracle_enabled("use_for_train_loss"):
-            self.train_key, loss_key = jr.split(self.train_key)
-            value = self.compute_batch_loss(batch, loss_key, use_oracle=True)
-        else:
-            value, self.model, self.train_key, self.opt_state = (
-                BaseDiffusionModel.make_step(
-                    self.model,
-                    self.batch_loss_fn,
-                    self.weight,
-                    self.int_beta,
-                    self.prediction_target,
-                    batch,
-                    self.t1,
-                    self.train_key,
-                    self.opt_state,
-                    self.optim.update,
+        with jax.profiler.StepTraceAnnotation("train", step_num=int(self.global_step_)):
+            if not self._shape_debug_printed:
+                self._debug_training_shapes(batch)
+                self._shape_debug_printed = True
+            if self._oracle_enabled("use_for_train_loss"):
+                self.train_key, loss_key = jr.split(self.train_key)
+                value = self.compute_batch_loss(batch, loss_key, use_oracle=True)
+            else:
+                value, self.model, self.train_key, self.opt_state = (
+                    BaseDiffusionModel.make_step(
+                        self.model,
+                        self.batch_loss_fn,
+                        self.weight,
+                        self.int_beta,
+                        self.prediction_target,
+                        batch,
+                        self.t1,
+                        self.train_key,
+                        self.opt_state,
+                        self.optim.update,
+                    )
                 )
-            )
-        loss_value = jnp.asarray(value).item()
-        self.log(
-            "Train_Loss",
-            loss_value,
-            prog_bar=True,
-            on_step=False,
-            on_epoch=True,
-            batch_size=1,
-        )
-        dict_ = {"loss": torch.scalar_tensor(loss_value)}
-        self.global_step_ += 1
-        if (
-            self._should_run_metrics_this_epoch("train")
-            and len(self._train_batches_for_metrics) < self.train_metric_batches
-        ):
-            self._train_batches_for_metrics.append(batch)
-        return dict_
+            self._train_loss_sum = self._train_loss_sum + jnp.asarray(value)
+            self._train_loss_count += 1
+            self.global_step_ += 1
+            if (
+                self._should_run_metrics_this_epoch("train")
+                and len(self._train_batches_for_metrics) < self.train_metric_batches
+            ):
+                self._train_batches_for_metrics.append(batch)
+            return None
 
     def validation_step(self, batch):
-        self.loader_key, val_key = jr.split(self.loader_key)
-        value = self.compute_batch_loss(
-            batch,
-            val_key,
-            use_oracle=self._oracle_enabled("use_for_val_loss"),
-        )
-        self.log(
-            "Val_Loss",
-            jnp.asarray(value).item(),
-            prog_bar=True,
-            on_step=False,
-            on_epoch=True,
-            batch_size=1,
-        )
-        # collect some first batches to compute metrics on
-        if (
-            self.metrics is not None
-            and self._should_run_metrics_this_epoch("val")
-            and len(self._val_batches_for_metrics) < self.val_metric_batches
+        with jax.profiler.StepTraceAnnotation(
+            "validation", step_num=int(self.current_epoch)
         ):
-            self._val_batches_for_metrics.append(batch)
+            self.loader_key, val_key = jr.split(self.loader_key)
+            value = self.compute_batch_loss(
+                batch,
+                val_key,
+                use_oracle=self._oracle_enabled("use_for_val_loss"),
+            )
+            self._val_loss_sum = self._val_loss_sum + jnp.asarray(value)
+            self._val_loss_count += 1
+            # collect some first batches to compute metrics on
+            if (
+                self.metrics is not None
+                and self._should_run_metrics_this_epoch("val")
+                and len(self._val_batches_for_metrics) < self.val_metric_batches
+            ):
+                self._val_batches_for_metrics.append(batch)
 
     @staticmethod
     @eqx.filter_jit
@@ -467,7 +460,23 @@ class BaseDiffusionModel(L.LightningModule):
         self._save_local_checkpoint()
         self._log_model_artifact()
 
+    def on_train_epoch_start(self) -> None:
+        self._train_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+        self._train_loss_count = 0
+
     def on_train_epoch_end(self) -> None:
+        if self._train_loss_count > 0:
+            avg_train_loss = float(
+                jnp.asarray(self._train_loss_sum / self._train_loss_count)
+            )
+            self.log(
+                "Train_Loss",
+                avg_train_loss,
+                prog_bar=True,
+                on_step=False,
+                on_epoch=True,
+                batch_size=self._train_loss_count,
+            )
         if not self._should_run_metrics_this_epoch("train"):
             self._train_batches_for_metrics.clear()
             return
@@ -643,8 +652,22 @@ class BaseDiffusionModel(L.LightningModule):
             f"mask_matches_gt_time={aligned_mask.shape == aligned_gt_xy.shape[:-1]}"
         )
 
+    def on_validation_epoch_start(self) -> None:
+        self._val_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+        self._val_loss_count = 0
+
     def on_validation_epoch_end(self) -> None:
         self._save_local_checkpoint()
+        if self._val_loss_count > 0:
+            avg_val_loss = float(jnp.asarray(self._val_loss_sum / self._val_loss_count))
+            self.log(
+                "Val_Loss",
+                avg_val_loss,
+                prog_bar=True,
+                on_step=False,
+                on_epoch=True,
+                batch_size=self._val_loss_count,
+            )
         if not self._should_run_metrics_this_epoch("val"):
             self._val_batches_for_metrics.clear()
             return

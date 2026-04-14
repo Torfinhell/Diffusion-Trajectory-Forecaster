@@ -1,5 +1,5 @@
 defaults:
-  - model: diffusion_attn_2x
+  - model: diffusion_attn
   - dataloaders: basic
   - data: small_base_wo_vis
   - transforms: null
@@ -22,7 +22,11 @@ trainer:
   samples_per_scene: 1
   generate_every_epoch: 0
   print_hparams: False
-  logging: "online"
+  logging: "offline"
   load_last_checkpoint: False
 
   enable_profiler: False
+  enable_jax_profiler: False
+  jax_profiler_dir: null
+  jax_profiler_start_step: 2
+  jax_profiler_num_steps: 3

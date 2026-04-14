@@ -4,3 +4,5 @@ task_name: "testing"
 save_dir: "clearml"
 mode: ${trainer.logging}
 output_uri: null
+flush_metrics_every_n_epochs: 40
+metric_buffer_max_size: 1000

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,6 +18,14 @@ from pytorch_lightning.loggers.logger import Logger, rank_zero_experiment
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 
+@dataclass(slots=True)
+class _ScalarEvent:
+    title: str
+    series: str
+    value: float
+    iteration: int
+
+
 class ClearMLLogger(Logger):
     LOGGER_JOIN_CHAR = "/"
 
@@ -28,6 +37,8 @@ class ClearMLLogger(Logger):
         mode: str = "online",
         output_uri: Optional[str] = None,
         prefix: str = "",
+        flush_metrics_every_n_epochs: int = 10,
+        metric_buffer_max_size: int = 1000,
     ) -> None:
         super().__init__()
         self._project_name = project_name
@@ -36,8 +47,12 @@ class ClearMLLogger(Logger):
         self._mode = str(mode).lower()
         self._output_uri = output_uri
         self._prefix = prefix
+        self._flush_metrics_every_n_epochs = max(1, int(flush_metrics_every_n_epochs))
+        self._metric_buffer_max_size = max(1, int(metric_buffer_max_size))
         self._task = None
         self._clearml_logger = None
+        self._pending_scalars: list[_ScalarEvent] = []
+        self._last_flushed_epoch = -1
 
     @property
     @rank_zero_experiment
@@ -62,6 +77,10 @@ class ClearMLLogger(Logger):
             task_name=self._task_name,
             output_uri=self._output_uri,
             reuse_last_task_id=False,
+            auto_connect_arg_parser=False,
+            auto_connect_frameworks=False,
+            auto_resource_monitoring=False,
+            auto_connect_streams=False,
         )
         self._clearml_logger = self._task.get_logger()
         return self._task
@@ -96,8 +115,7 @@ class ClearMLLogger(Logger):
 
     @rank_zero_only
     def log_metrics(self, metrics: dict[str, float], step: Optional[int] = None) -> None:
-        task = self.experiment
-        if task is None or self._clearml_logger is None:
+        if self._mode == "disabled":
             return
 
         prefixed_metrics = _add_prefix(metrics, self._prefix, self.LOGGER_JOIN_CHAR)
@@ -108,12 +126,53 @@ class ClearMLLogger(Logger):
                 scalar = float(value)
             except (TypeError, ValueError):
                 continue
-            self._clearml_logger.report_scalar(
-                title=title,
-                series=series,
-                value=scalar,
-                iteration=iteration,
+            self._pending_scalars.append(
+                _ScalarEvent(
+                    title=title,
+                    series=series,
+                    value=scalar,
+                    iteration=iteration,
+                )
             )
+
+        if len(self._pending_scalars) >= self._metric_buffer_max_size:
+            self.flush_metrics()
+
+    @rank_zero_only
+    def maybe_flush_metrics(self, epoch: int, force: bool = False) -> None:
+        if not self._pending_scalars:
+            return
+        if force:
+            self.flush_metrics()
+            self._last_flushed_epoch = int(epoch)
+            return
+
+        epoch = int(epoch)
+        if epoch <= self._last_flushed_epoch:
+            return
+        if epoch % self._flush_metrics_every_n_epochs != 0:
+            return
+        self.flush_metrics()
+        self._last_flushed_epoch = epoch
+
+    @rank_zero_only
+    def flush_metrics(self) -> None:
+        if not self._pending_scalars:
+            return
+
+        task = self.experiment
+        if task is None or self._clearml_logger is None:
+            self._pending_scalars.clear()
+            return
+
+        for event in self._pending_scalars:
+            self._clearml_logger.report_scalar(
+                title=event.title,
+                series=event.series,
+                value=event.value,
+                iteration=event.iteration,
+            )
+        self._pending_scalars.clear()
 
     @rank_zero_only
     def log_image(self, key: str, images: list[Any], step: Optional[int] = None) -> None:
@@ -172,6 +231,13 @@ class ClearMLLogger(Logger):
         task = self._task
         if task is None:
             return
+        self.flush_metrics()
+        # ClearML waits up to 300s on shutdown for async repository / requirements
+        # detection. For our runs this metadata is not worth stalling process exit,
+        # especially in offline mode, so kill the background detection thread first.
+        wait_for_repo_detection = getattr(task, "_wait_for_repo_detection", None)
+        if callable(wait_for_repo_detection):
+            wait_for_repo_detection(timeout=-1)
         task.close()
 
     @staticmethod
