@@ -40,7 +40,6 @@ def data_process_traffic_light(
 
 @jax.jit(
     static_argnames=[
-        "max_num_objects",
         "max_polylines",
         "current_index",
         "num_points_polyline",
@@ -50,7 +49,6 @@ def data_process_traffic_light(
 )
 def data_process_scenarios(
     scenarios,
-    max_num_objects=64,
     max_polylines=256,
     current_index=10,
     num_points_polyline=30,
@@ -90,10 +88,7 @@ def data_process_scenarios(
     origin_xy = jnp.where(has_history[..., None, None], origin_xy, 0.0)
     # past trajectory (context)
     data_dict.update(
-        {
-            "context": jnp.where(context_valid, context_xy - origin_xy, 0.0)
-            / COORD_SCALE
-        }
+        {"context": jnp.where(context_valid, context_xy - origin_xy, 0.0) / COORD_SCALE}
     )
     # future trajectory (target for diffusion)
     data_dict.update(

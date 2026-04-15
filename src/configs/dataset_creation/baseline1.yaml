@@ -7,7 +7,6 @@ dataset_creation:
     max_num_objects: 32
     extract_scene: true
     preprocessing:
-      max_num_objects: 64
       max_polylines: 256
       current_index: 10
       num_points_polyline: 30
@@ -20,7 +19,6 @@ dataset_creation:
     max_num_objects: 32
     extract_scene: true
     preprocessing:
-      max_num_objects: 64
       max_polylines: 256
       current_index: 10
       num_points_polyline: 30
@@ -33,7 +31,6 @@ dataset_creation:
     max_num_objects: 32
     extract_scene: true
     preprocessing:
-      max_num_objects: 64
       max_polylines: 256
       current_index: 10
       num_points_polyline: 30
