@@ -5,6 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "pyOpenSSL>=24.0.0",
+    "cryptography>=42.0.0",
     "diffrax>=0.7.2",
     "dvc-webdav>=3.0.1",
     "dvc[gdrive,s3]>=3.67.0",
