@@ -1,6 +1,7 @@
 import bisect
 import pickle
 import subprocess
+from collections import OrderedDict
 from pathlib import Path
 
 from hydra.utils import to_absolute_path
@@ -15,9 +16,15 @@ from src.data_module.dataset_creation import (
 
 
 class DiffusionTrackerDataset(Dataset):
-    def __init__(self, processed_path: str, dvc_file: str | None = None):
+    def __init__(
+        self,
+        processed_path: str,
+        dvc_file: str | None = None,
+        chunk_cache_size: int = 8,
+    ):
         super().__init__()
-        self._chunk_cache = {}
+        self._chunk_cache: OrderedDict[int, list] = OrderedDict()
+        self._chunk_cache_size = max(1, int(chunk_cache_size))
         self._chunk_paths = []
         self._chunk_offsets = []
         self._chunk_sizes = []
@@ -120,26 +127,33 @@ class DiffusionTrackerDataset(Dataset):
     def _load_chunk(self, chunk_idx: int):
         chunk = self._chunk_cache.get(chunk_idx)
         if chunk is not None:
+            self._chunk_cache.move_to_end(chunk_idx)
             return chunk
 
         with self._chunk_paths[chunk_idx].open("rb") as file:
             chunk = pickle.load(file)
 
-        # Keep a single hot chunk in memory to stay memory-safe during training.
-        self._chunk_cache = {chunk_idx: chunk}
+        self._remember_chunk(chunk_idx, chunk)
         return chunk
 
     def _load_single_file_chunk(self, chunk_idx: int):
         chunk = self._chunk_cache.get(chunk_idx)
         if chunk is not None:
+            self._chunk_cache.move_to_end(chunk_idx)
             return chunk
 
         with self._dataset_path.open("rb") as file:
             file.seek(self._chunk_offsets[chunk_idx])
             chunk = pickle.load(file)
 
-        self._chunk_cache = {chunk_idx: chunk}
+        self._remember_chunk(chunk_idx, chunk)
         return chunk
+
+    def _remember_chunk(self, chunk_idx: int, chunk):
+        self._chunk_cache[chunk_idx] = chunk
+        self._chunk_cache.move_to_end(chunk_idx)
+        while len(self._chunk_cache) > self._chunk_cache_size:
+            self._chunk_cache.popitem(last=False)
 
     def __getitem__(self, key):
         idx = int(key)
@@ -162,3 +176,14 @@ class DiffusionTrackerDataset(Dataset):
 
     def __len__(self):
         return self._length
+
+    @property
+    def num_chunks(self) -> int:
+        return len(self._chunk_sizes)
+
+    def chunk_bounds(self, chunk_idx: int) -> tuple[int, int]:
+        if chunk_idx < 0 or chunk_idx >= self.num_chunks:
+            raise IndexError("chunk index out of range")
+        chunk_start = 0 if chunk_idx == 0 else self._chunk_ends[chunk_idx - 1]
+        chunk_end = self._chunk_ends[chunk_idx]
+        return chunk_start, chunk_end

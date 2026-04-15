@@ -4,6 +4,13 @@ train:
   num_workers: 0
   pin_memory: True
   shuffle: True
+  drop_last: True
+  chunk_sampler:
+    enabled: True
+    active_chunk_window: 8
+    chunk_window_step: null
+    shuffle_within_window: True
+    seed: 0
 val:
   _target_: torch.utils.data.DataLoader
   batch_size: 50
