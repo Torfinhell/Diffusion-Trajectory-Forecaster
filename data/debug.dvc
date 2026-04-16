@@ -1,0 +1,6 @@
+outs:
+- md5: c1f56b6d7f09dfd041d22b9f7722b665.dir
+  size: 2636814
+  nfiles: 3
+  hash: md5
+  path: debug

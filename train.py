@@ -69,7 +69,7 @@ class ClearMLFlushCallback(Callback):
         self._maybe_flush(trainer, force=True)
 
 
-@hydra.main(version_base=None, config_name="ddpm_baseline", config_path="src/configs")
+@hydra.main(version_base=None, config_name="ddpm_1", config_path="src/configs")
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=True)
     logger = instantiate(hparams.logger)
