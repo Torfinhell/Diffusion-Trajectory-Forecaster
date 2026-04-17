@@ -5,7 +5,7 @@ cfg_metrics: ${metrics}
 grad_clip: ${trainer.gradient_clip_val}
 vis_cfg: ${visual}
 trainer_cfg: ${trainer}
-prediction_target: score
+prediction_target: x0
 lr: 1e-3
 lr_scheduler:
   name: cosine

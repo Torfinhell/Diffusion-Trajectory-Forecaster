@@ -1,0 +1,44 @@
+enabled: true
+n_trials: 20
+direction: minimize
+metric: "Val_Proxy_Loss"
+study_name: null
+storage: null
+load_if_exists: true
+gc_after_trial: true
+
+sampler:
+  seed: ${trainer.seed}
+
+pruner:
+  enabled: true
+  n_startup_trials: 5
+  n_warmup_steps: 1
+  interval_steps: 1
+
+trainer_overrides:
+  enable_profiler: false
+  enable_jax_profiler: false
+
+proxy_metric:
+  enabled: true
+  step_stride: 5
+  include_last: true
+  disable_sampling_metrics: true
+
+search_space:
+  model.lr:
+    type: float
+    low: 1.0e-4
+    high: 3.0e-3
+    log: true
+  model.lr_scheduler.decay_steps:
+    type: int
+    low: 100
+    high: 600
+    step: 10
+  model.lr_scheduler.end_lr:
+    type: float
+    low: 1.0e-5
+    high: 1.0e-3
+    log: true

@@ -33,6 +33,7 @@ RUN --mount=type=cache,target=/tmp/uv-cache uv sync --frozen --no-install-projec
 
 COPY . .
 RUN --mount=type=cache,target=/tmp/uv-cache uv sync --frozen
+RUN chmod -R 777 /opt/venv
 
 ENV PATH="/opt/venv/bin:$PATH"
 

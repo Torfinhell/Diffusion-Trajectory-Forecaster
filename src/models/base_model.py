@@ -60,6 +60,8 @@ class BaseDiffusionModel(L.LightningModule):
         self._train_loss_count = 0
         self._val_loss_sum = jnp.array(0.0, dtype=jnp.float32)
         self._val_loss_count = 0
+        self._val_proxy_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+        self._val_proxy_loss_count = 0
         self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
         self._val_batches_for_metrics = []
         self.train_metric_batches = int(
@@ -74,6 +76,7 @@ class BaseDiffusionModel(L.LightningModule):
                 f"Unsupported prediction_target '{prediction_target}'. "
                 "Use one of: x0, epsilon, score."
             )
+        self.proxy_val_cfg = self.trainer_cfg.get("proxy_val_loss", {})
         self.model = self.get_model(key_model)
         self.configure_ddpm_scheduler()
         self.configure_optimizers()
@@ -173,6 +176,13 @@ class BaseDiffusionModel(L.LightningModule):
             )
             self._val_loss_sum = self._val_loss_sum + jnp.asarray(value)
             self._val_loss_count += 1
+            if self._proxy_val_enabled():
+                self.loader_key, proxy_key = jr.split(self.loader_key)
+                proxy_value = self.compute_proxy_batch_loss(batch, proxy_key)
+                self._val_proxy_loss_sum = self._val_proxy_loss_sum + jnp.asarray(
+                    proxy_value
+                )
+                self._val_proxy_loss_count += 1
             # collect some first batches to compute metrics on
             if (
                 self.metrics is not None
@@ -386,6 +396,21 @@ class BaseDiffusionModel(L.LightningModule):
         t_min = min(0.1, float(t1) * 0.5)
         t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t1)
         """ Fixing the first three arguments of single_loss_fn, leaving batch, t and key as input """
+        loss_fn = partial(
+            BaseDiffusionModel.single_loss_fn,
+            model,
+            weight,
+            int_beta,
+            prediction_target,
+        )
+        loss_fn = jax.vmap(loss_fn)
+        return jnp.mean(loss_fn(batch, t, losskey))
+
+    @staticmethod
+    def batch_loss_fn_fixed_t(model, weight, int_beta, prediction_target, batch, t, key):
+        batch_size = batch["gt_xy"].shape[0]
+        losskey = jr.split(key, batch_size)
+        t = jnp.full((batch_size,), t, dtype=jnp.float32)
         loss_fn = partial(
             BaseDiffusionModel.single_loss_fn,
             model,
@@ -655,6 +680,8 @@ class BaseDiffusionModel(L.LightningModule):
     def on_validation_epoch_start(self) -> None:
         self._val_loss_sum = jnp.array(0.0, dtype=jnp.float32)
         self._val_loss_count = 0
+        self._val_proxy_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+        self._val_proxy_loss_count = 0
 
     def on_validation_epoch_end(self) -> None:
         self._save_local_checkpoint()
@@ -667,6 +694,18 @@ class BaseDiffusionModel(L.LightningModule):
                 on_step=False,
                 on_epoch=True,
                 batch_size=self._val_loss_count,
+            )
+        if self._proxy_val_enabled() and self._val_proxy_loss_count > 0:
+            avg_proxy_loss = float(
+                jnp.asarray(self._val_proxy_loss_sum / self._val_proxy_loss_count)
+            )
+            self.log(
+                "Val_Proxy_Loss",
+                avg_proxy_loss,
+                prog_bar=True,
+                on_step=False,
+                on_epoch=True,
+                batch_size=self._val_proxy_loss_count,
             )
         if not self._should_run_metrics_this_epoch("val"):
             self._val_batches_for_metrics.clear()
@@ -760,6 +799,40 @@ class BaseDiffusionModel(L.LightningModule):
     def _save_local_checkpoint(self) -> None:
         self.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
         eqx.tree_serialise_leaves(self.CHECKPOINT_PATH, self.model)
+
+    def _proxy_val_enabled(self) -> bool:
+        return bool(self.proxy_val_cfg.get("enabled", False))
+
+    def _proxy_t_values(self):
+        step_stride = max(1, int(self.proxy_val_cfg.get("step_stride", 5)))
+        include_last = bool(self.proxy_val_cfg.get("include_last", True))
+        t0 = float(self._sampling_t0())
+        t1 = float(self.t1)
+        dt0 = abs(float(getattr(self, "dt0", 0.01)))
+        num_steps = max(1, int(np.ceil((t1 - t0) / dt0)))
+        ts = np.linspace(t0, t1, num_steps + 1, dtype=np.float32)[1:]
+        selected = ts[step_stride - 1 :: step_stride]
+        if include_last and (len(selected) == 0 or selected[-1] != ts[-1]):
+            selected = np.concatenate([selected, ts[-1:]])
+        return jnp.asarray(selected, dtype=jnp.float32)
+
+    def compute_proxy_batch_loss(self, batch, key):
+        t_values = self._proxy_t_values()
+        keys = jr.split(key, int(t_values.shape[0]))
+
+        def loss_at_t(t, loss_key):
+            return self.batch_loss_fn_fixed_t(
+                self.model,
+                self.weight,
+                self.int_beta,
+                self.prediction_target,
+                batch,
+                t,
+                loss_key,
+            )
+
+        losses = jax.vmap(loss_at_t)(t_values, keys)
+        return jnp.mean(losses)
 
     def _log_model_artifact(self) -> None:
         logger = getattr(self, "logger", None)
