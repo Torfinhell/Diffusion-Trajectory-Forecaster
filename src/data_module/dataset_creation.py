@@ -1,4 +1,5 @@
 import dataclasses
+import json
 import logging
 import pickle
 import shutil
@@ -16,8 +17,10 @@ from .data_process import data_process_scenarios
 LOGGER = logging.getLogger(__name__)
 CHUNKED_DATASET_FORMAT = "diffusion_tracker_chunked_v1"
 SINGLE_FILE_CHUNKED_DATASET_FORMAT = "diffusion_tracker_single_file_chunked_v1"
+WEBDATASET_FORMAT = "diffusion_tracker_webdataset_v1"
 SINGLE_FILE_INDEX_MAGIC = b"DTDSIDX1"
 SINGLE_FILE_INDEX_TRAILER = struct.Struct("<Q8s")
+WEBDATASET_INDEX_FILENAME = "index.json"
 
 
 def _strip_leading_batch_axis(sample):
@@ -81,6 +84,12 @@ def iter_processed_samples(
         if extract_scene:
             processed = {"scenario": state, **processed}
         yield processed
+
+
+def resolve_webdataset_output_root(processed_path) -> Path:
+    processed_path = Path(processed_path)
+    suffix = processed_path.suffix or ".data"
+    return processed_path.with_suffix(f"{suffix}.wds")
 
 
 def _save_processed_samples_as_directory_chunks(processed_path, samples, flush_every):
@@ -173,6 +182,44 @@ def _save_processed_samples_as_single_file(processed_path, samples, flush_every)
     return processed_path
 
 
+def _save_processed_samples_as_webdataset(processed_path, samples, flush_every):
+    try:
+        import webdataset as wds
+    except ImportError as exc:
+        raise RuntimeError(
+            "storage_format='webdataset' requires the 'webdataset' package to be installed."
+        ) from exc
+
+    output_root = resolve_webdataset_output_root(processed_path)
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    shard_pattern = str(output_root / "shard-%06d.tar")
+    total_samples = 0
+
+    with wds.ShardWriter(shard_pattern, maxcount=flush_every) as sink:
+        for index, sample in enumerate(samples):
+            sink.write(
+                {
+                    "__key__": f"{index:09d}",
+                    "pth": wds.torch_dumps(sample),
+                }
+            )
+            total_samples += 1
+
+    index_path = output_root / WEBDATASET_INDEX_FILENAME
+    metadata = {
+        "format": WEBDATASET_FORMAT,
+        "num_samples": total_samples,
+        "num_shards": len(list(output_root.glob("shard-*.tar"))),
+        "shard_glob": "shard-*.tar",
+    }
+    index_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    return output_root
+
+
 def save_processed_samples(
     processed_path,
     samples,
@@ -195,7 +242,14 @@ def save_processed_samples(
             samples,
             flush_every,
         )
+    if storage_format in {"webdataset", "wds", "tar_shards"}:
+        return _save_processed_samples_as_webdataset(
+            processed_path,
+            samples,
+            flush_every,
+        )
     raise ValueError(
         "Unsupported storage_format. "
-        "Use one of: directory_chunks, chunked, chunks, single_file, single_pkl, streamed_single_file."
+        "Use one of: directory_chunks, chunked, chunks, single_file, single_pkl, "
+        "streamed_single_file, webdataset, wds, tar_shards."
     )

@@ -136,6 +136,73 @@ uv run python create_dataset.py dataset_creation.train.num_states=100
 uv run python create_dataset.py dataset_creation.val.max_num_objects=16
 ```
 
+### Dataset formats
+The repository currently supports two processed dataset formats:
+
+1. Legacy chunked pickle format
+2. WebDataset shard format
+
+Legacy chunked pickle format:
+- storage format value: `directory_chunks`
+- output layout:
+  - one manifest file such as `train_processed_v1.pkl`
+  - one chunk directory such as `train_processed_v1.pkl.chunks/`
+- training path:
+  - `src/data_module/legacy_dataset.py`
+  - custom chunk cache
+  - custom chunk sampler from `src/data_module/sampler.py`
+
+WebDataset shard format:
+- storage format value: `webdataset`
+- output layout:
+  - one shard directory such as `train_processed_v1.pkl.wds/`
+  - many tar shards inside it, for example `shard-000000.tar`
+  - one `index.json`
+- training path:
+  - `src/data_module/dataset.py`
+  - standard `webdataset.WebDataset(...)`
+  - no custom chunk sampler
+
+
+Create the legacy chunked format:
+```bash
+uv run python create_dataset.py \
+  data=small_base_wo_vis \
+  dataset_creation=small_base_wo_vis \
+  storage_format=directory_chunks
+```
+
+Create the WebDataset format:
+```bash
+uv run python create_dataset.py \
+  data=small_base_wo_vis \
+  dataset_creation=small_base_wo_vis \
+  storage_format=webdataset
+```
+
+Train with the legacy chunked format:
+```bash
+uv run python train.py \
+  data=small_base_wo_vis \
+  data.train.storage_format=directory_chunks \
+  data.val.storage_format=directory_chunks \
+  data.test.storage_format=directory_chunks
+```
+
+Train with the WebDataset format:
+```bash
+uv run python train.py \
+  data=small_base_wo_vis \
+  data.train.storage_format=webdataset \
+  data.val.storage_format=webdataset \
+  data.test.storage_format=webdataset
+```
+
+How the training path is selected:
+- `src/configs/data/*.yaml` contains `storage_format` for each split
+- if `storage_format=webdataset`, training uses the WebDataset loader
+- otherwise it falls back to the legacy chunked dataset loader
+
 ### Config guide
 The project uses Hydra configs from `src/configs/`. The script you run decides which config groups are read.
 

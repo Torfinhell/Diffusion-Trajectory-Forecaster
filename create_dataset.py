@@ -3,6 +3,7 @@ import pickle
 import shutil
 import subprocess
 from pathlib import Path
+import json
 
 import hydra
 from hydra.utils import get_original_cwd, to_absolute_path
@@ -12,6 +13,8 @@ from src.data_module.dataset_creation import (
     SINGLE_FILE_CHUNKED_DATASET_FORMAT,
     SINGLE_FILE_INDEX_MAGIC,
     SINGLE_FILE_INDEX_TRAILER,
+    WEBDATASET_FORMAT,
+    WEBDATASET_INDEX_FILENAME,
     iter_processed_samples,
     save_processed_samples,
 )
@@ -77,6 +80,15 @@ def _validate_shared_dataset_layout(processed_paths, dvc_files):
 
 
 def _read_num_samples(processed_path: Path) -> int:
+    if processed_path.is_dir():
+        index_path = processed_path / WEBDATASET_INDEX_FILENAME
+        if not index_path.exists():
+            raise RuntimeError(f"WebDataset index not found at {index_path}")
+        loaded = json.loads(index_path.read_text(encoding="utf-8"))
+        if loaded.get("format") == WEBDATASET_FORMAT:
+            return int(loaded.get("num_samples", 0))
+        raise RuntimeError(f"Unsupported dataset format at {processed_path}")
+
     with processed_path.open("rb") as file:
         file.seek(0, 2)
         file_size = file.tell()
@@ -108,7 +120,7 @@ def main(cfg) -> None:
     repo_root = _repo_root()
     _require_cli("dvc")
     _require_cli("git")
-    processed_paths = []
+    processed_artifacts = []
     dvc_files = set()
     flush_every = int(getattr(cfg, "flush_every", DEFAULT_FLUSH_EVERY))
     storage_format = str(getattr(cfg, "storage_format", "directory_chunks"))
@@ -118,7 +130,6 @@ def main(cfg) -> None:
         creation_cfg = cfg.dataset_creation[split]
         processed_path = _resolve_repo_path(artifact_cfg.processed_path)
         dvc_file = _resolve_repo_path(artifact_cfg.dvc_file)
-        processed_paths.append(processed_path)
         dvc_files.add(dvc_file)
 
         LOGGER.info("Creating %s split from raw data", split)
@@ -138,20 +149,22 @@ def main(cfg) -> None:
             flush_every,
             storage_format,
         )
-        save_processed_samples(
+        created_artifact = save_processed_samples(
             processed_path,
             samples,
             flush_every=flush_every,
             storage_format=storage_format,
         )
-        num_samples = _read_num_samples(processed_path)
+        created_artifact = Path(created_artifact)
+        processed_artifacts.append(created_artifact)
+        num_samples = _read_num_samples(created_artifact)
         if num_samples <= 0:
             raise RuntimeError(
-                f"Created empty {split} dataset at {processed_path}. "
+                f"Created empty {split} dataset at {created_artifact}. "
                 "Dataset creation stopped before producing any samples."
             )
 
-    dataset_dir, dvc_file = _validate_shared_dataset_layout(processed_paths, dvc_files)
+    dataset_dir, dvc_file = _validate_shared_dataset_layout(processed_artifacts, dvc_files)
 
     LOGGER.info("Tracking processed dataset directory with DVC: %s", dataset_dir)
     _run_logged(["dvc", "add", str(dataset_dir.relative_to(repo_root))], cwd=repo_root)
