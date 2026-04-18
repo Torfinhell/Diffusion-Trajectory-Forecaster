@@ -240,6 +240,43 @@ uv run python train.py data=processed_v2
 uv run python train.py model=diffusion_attn_2x trainer.num_epochs=230
 ```
 
+### Usual vs debug models
+The project now has separate normal and debug model classes.
+
+Usual attention model:
+```bash
+uv run python train.py model=diffusion_attn
+```
+
+Debug attention model:
+```bash
+uv run python train.py model=diffusion_attn_debug
+```
+
+You can still override individual debug flags when using the debug model, for example:
+```bash
+uv run python train.py model=diffusion_attn_debug visual.debug_metrics=true
+uv run python train.py model=diffusion_attn_debug visual.debug_denoiser_scale=true
+uv run python train.py model=diffusion_attn_debug model.oracle_cfg.use_for_sampling=true
+```
+
+How model selection works:
+- `src/configs/model/diffusion_attn.yaml` uses `src.models.DiffusionAttentionModel`
+- `src/configs/model/diffusion_attn_debug.yaml` uses `src.models.DiffusionAttentionDebugModel`
+- the normal model inherits `BaseDiffusionModel`
+- the debug model inherits `DebuggableBaseDiffusionModel`
+
+What the base model files do:
+- `src/models/base_model.py`: normal training, validation, loss, sampling, checkpointing, and metric entry points
+- `src/models/base_model_debuggable.py`: debug-only extensions such as extra shape/metric diagnostics, optional oracle paths, and fixed-noise sampling hooks
+- `src/models/base_model_debug.py`: small debug helper functions used only by the debug-capable model
+- `src/models/base_model_oracle.py`: oracle-only helper functions used by the debug-capable model
+- `src/models/base_model_eval.py`: shared metric-evaluation and visualization helpers used by both normal and debug models
+
+
+Note:
+- if you train the normal model, debug flags in `visual.*` or `model.oracle_cfg.*` will not activate debug-only code paths
+
 `create_dataset.py`:
 - root config: `src/configs/create_dataset.yaml`
 - config groups used for dataset creation:
