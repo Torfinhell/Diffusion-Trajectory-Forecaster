@@ -10,6 +10,7 @@ import optax
 from einops import rearrange, repeat
 
 from .base_model import BaseDiffusionModel
+from .base_model_debuggable import DebuggableBaseDiffusionModel
 
 
 class FourierEmbedding(eqx.Module):
@@ -281,7 +282,7 @@ class DiffAttention(eqx.Module):
         return jax.vmap(self.mlp_out)(x_t).reshape(self.out_shape)
 
 
-class DiffusionAttentionModel(BaseDiffusionModel):
+class _DiffusionAttentionBase:
     def __init__(
         self,
         se_args,
@@ -328,3 +329,13 @@ class DiffusionAttentionModel(BaseDiffusionModel):
         self.t0 = 1e-3
         self.t1 = 2.0
         self.dt0 = 0.01
+
+
+class DiffusionAttentionModel(_DiffusionAttentionBase, BaseDiffusionModel):
+    pass
+
+
+class DiffusionAttentionDebugModel(
+    _DiffusionAttentionBase, DebuggableBaseDiffusionModel
+):
+    pass

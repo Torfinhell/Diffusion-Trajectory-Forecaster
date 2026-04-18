@@ -7,6 +7,7 @@ import jax.random as jr
 import optax
 
 from .base_model import BaseDiffusionModel
+from .base_model_debuggable import DebuggableBaseDiffusionModel
 
 
 class DiffDenoiser(eqx.Module):
@@ -34,7 +35,7 @@ class DiffDenoiser(eqx.Module):
         return self.fc_out(x).reshape(self.out_shape)
 
 
-class DiffusionLinearModel(BaseDiffusionModel):
+class _DiffusionLinearBase:
     def __init__(
         self,
         hid_dim,
@@ -69,3 +70,11 @@ class DiffusionLinearModel(BaseDiffusionModel):
         self.t0 = 1e-3
         self.t1 = 5.0
         self.dt0 = 0.01
+
+
+class DiffusionLinearModel(_DiffusionLinearBase, BaseDiffusionModel):
+    pass
+
+
+class DiffusionLinearDebugModel(_DiffusionLinearBase, DebuggableBaseDiffusionModel):
+    pass

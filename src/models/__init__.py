@@ -1,2 +1,2 @@
-from src.models.diff_attn import DiffusionAttentionModel
-from src.models.diff_linear import DiffusionLinearModel
+from src.models.diff_attn import DiffusionAttentionDebugModel, DiffusionAttentionModel
+from src.models.diff_linear import DiffusionLinearDebugModel, DiffusionLinearModel
