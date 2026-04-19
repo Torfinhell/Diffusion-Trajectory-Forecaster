@@ -27,14 +27,18 @@ def log_images(model, key, images):
     logger = getattr(model, "logger", None)
     if logger is None or not hasattr(logger, "log_image"):
         return
-    logger.log_image(key=key, images=images, step=int(model.global_step))
+    logger.log_image(key=key, images=images, step=int(model.global_step_))
 
 
 def log_video(model, key, path):
     logger = getattr(model, "logger", None)
     if logger is None or not hasattr(logger, "log_video"):
         return
-    logger.log_video(key=key, path=path, step=int(model.global_step))
+    logger.log_video(key=key, path=path, step=int(model.global_step_))
+
+
+def metric_log_name(split, name):
+    return f"{split}_{name}"
 
 
 def mask_pred_for_plot(pred_xy, gt_xy_mask):
@@ -88,15 +92,14 @@ def update_metrics_for_batch(model, metrics, batch, return_first_prediction=Fals
 
 
 def on_train_epoch_end(model):
-    if model._train_loss_count > 0:
-        avg_train_loss = float(jnp.asarray(model._train_loss_sum / model._train_loss_count))
+    train_losses = model.train_loss_tracker.result()
+    if "train_loss" in train_losses:
         model.log(
-            "Train_Loss",
-            avg_train_loss,
+            metric_log_name("train", "loss"),
+            train_losses["train_loss"],
             prog_bar=True,
             on_step=False,
             on_epoch=True,
-            batch_size=model._train_loss_count,
         )
     if not model._should_run_metrics_this_epoch("train"):
         model._train_batches_for_metrics.clear()
@@ -142,7 +145,7 @@ def on_train_epoch_end(model):
                 )
 
     vals = model.metrics_train.compute()
-    log_dict = {f"Train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
+    log_dict = {metric_log_name("train", k): float(jnp.asarray(v)) for k, v in vals.items()}
     model.log_dict(log_dict, prog_bar=True)
     if enable_train_visualization and train_images:
         log_images(
@@ -158,27 +161,22 @@ def on_train_epoch_end(model):
 
 
 def on_validation_epoch_end(model):
-    if model._val_loss_count > 0:
-        avg_val_loss = float(jnp.asarray(model._val_loss_sum / model._val_loss_count))
+    val_losses = model.val_loss_tracker.result()
+    if "val_loss" in val_losses:
         model.log(
-            "Val_Loss",
-            avg_val_loss,
+            metric_log_name("val", "loss"),
+            val_losses["val_loss"],
             prog_bar=True,
             on_step=False,
             on_epoch=True,
-            batch_size=model._val_loss_count,
         )
-    if model._proxy_val_enabled() and model._val_proxy_loss_count > 0:
-        avg_proxy_loss = float(
-            jnp.asarray(model._val_proxy_loss_sum / model._val_proxy_loss_count)
-        )
+    if model._proxy_val_enabled() and "val_proxy_loss" in val_losses:
         model.log(
-            "Val_Proxy_Loss",
-            avg_proxy_loss,
+            metric_log_name("val", "proxy_loss"),
+            val_losses["val_proxy_loss"],
             prog_bar=True,
             on_step=False,
             on_epoch=True,
-            batch_size=model._val_proxy_loss_count,
         )
     if not model._should_run_metrics_this_epoch("val"):
         model._val_batches_for_metrics.clear()
@@ -227,8 +225,6 @@ def on_validation_epoch_end(model):
         )
 
     vals = model.metrics_val.compute()
-    log_dict = {
-        f"{model.metrics_prefix}/{k}": float(jnp.asarray(v)) for k, v in vals.items()
-    }
+    log_dict = {metric_log_name("val", k): float(jnp.asarray(v)) for k, v in vals.items()}
     model.log_dict(log_dict, prog_bar=True)
     model._val_batches_for_metrics.clear()

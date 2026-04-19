@@ -10,7 +10,7 @@ import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
 
-from src.metrics import MetricCollection, Static_metrics
+from src.metrics import MetricCollection, MetricTracker
 from src.models.base_model_eval import on_train_epoch_end as run_train_epoch_end
 from src.models.base_model_eval import (
     on_validation_epoch_end as run_validation_epoch_end,
@@ -40,6 +40,7 @@ class BaseDiffusionModel(L.LightningModule):
         self.key, key_model, self.train_key, self.loader_key, self.sample_key = (
             jax.random.split(self.key, 5)
         )
+        self.metrics = cfg_metrics
         self.vis = vis_cfg
         self.trainer_cfg = trainer_cfg or {}
         self.load_last_checkpoint = load_last_checkpoint
@@ -49,20 +50,12 @@ class BaseDiffusionModel(L.LightningModule):
             [instantiate(m) for m in self.metrics.train]
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
-        self.losses = Static_metrics(
-            "val_loss",
-            "train_loss",
-        )
-        self._train_loss_count = 0
-        self._val_loss_sum = jnp.array(0.0, dtype=jnp.float32)
-        self._val_loss_count = 0
-        self._val_proxy_loss_sum = jnp.array(0.0, dtype=jnp.float32)
-        self._val_proxy_loss_count = 0
+        self.train_loss_tracker = MetricTracker("train_loss")
+        self.val_loss_tracker = MetricTracker("val_loss", "val_proxy_loss")
         self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
         self._val_batches_for_metrics = []
         self.train_metric_batches = int(self.trainer_cfg.get("train_metric_batches", 3))
         self._train_batches_for_metrics = []
-        self.metrics_prefix = "Val"
         self.prediction_target = str(prediction_target).lower()
         if self.prediction_target not in {"x0", "epsilon", "score"}:
             raise ValueError(
@@ -140,8 +133,7 @@ class BaseDiffusionModel(L.LightningModule):
                     self.optim.update,
                 )
             )
-            self._train_loss_sum = self._train_loss_sum + jnp.asarray(value)
-            self._train_loss_count += 1
+            self.train_loss_tracker.update("train_loss", jnp.asarray(value))
             self.global_step_ += 1
             if (
                 self._should_run_metrics_this_epoch("train")
@@ -156,15 +148,11 @@ class BaseDiffusionModel(L.LightningModule):
         ):
             self.loader_key, val_key = jr.split(self.loader_key)
             value = self.compute_batch_loss(batch, val_key)
-            self._val_loss_sum = self._val_loss_sum + jnp.asarray(value)
-            self._val_loss_count += 1
+            self.val_loss_tracker.update("val_loss", jnp.asarray(value))
             if self._proxy_val_enabled():
                 self.loader_key, proxy_key = jr.split(self.loader_key)
                 proxy_value = self.compute_proxy_batch_loss(batch, proxy_key)
-                self._val_proxy_loss_sum = self._val_proxy_loss_sum + jnp.asarray(
-                    proxy_value
-                )
-                self._val_proxy_loss_count += 1
+                self.val_loss_tracker.update("val_proxy_loss", jnp.asarray(proxy_value))
             # collect some first batches to compute metrics on
             if (
                 self._should_run_metrics_this_epoch("val")
@@ -196,11 +184,19 @@ class BaseDiffusionModel(L.LightningModule):
         return loss, model, key, opt_state
 
     def _sampling_t0(self):
-        # Subclasses can override this when sampling should start from a
-        # different noise level than the model default.
+        # Override hook for subclasses that need a different sampling start
         if hasattr(self, "t0"):
             return float(self.t0)
         return 1e-3
+
+    def _oracle_enabled(self, key):
+        # Override hook for debug subclass
+        del key
+        return False
+
+    def _oracle_sampling_mode(self):
+        # Override hook for debug subclass
+        return "exact"
 
     def _metric_every_n_epochs(self, split):
         key = f"{split}_metric_every_n_epochs"
@@ -326,17 +322,13 @@ class BaseDiffusionModel(L.LightningModule):
         self._log_model_artifact()
 
     def on_train_epoch_start(self) -> None:
-        self._train_loss_sum = jnp.array(0.0, dtype=jnp.float32)
-        self._train_loss_count = 0
+        self.train_loss_tracker.reset()
 
     def on_train_epoch_end(self) -> None:
         return run_train_epoch_end(self)
 
     def on_validation_epoch_start(self) -> None:
-        self._val_loss_sum = jnp.array(0.0, dtype=jnp.float32)
-        self._val_loss_count = 0
-        self._val_proxy_loss_sum = jnp.array(0.0, dtype=jnp.float32)
-        self._val_proxy_loss_count = 0
+        self.val_loss_tracker.reset()
 
     def on_validation_epoch_end(self) -> None:
         self._save_local_checkpoint()
@@ -420,10 +412,12 @@ class BaseDiffusionModel(L.LightningModule):
         num_solutions=1,
         predict_shape=None,
         save_full=False,
+        oracle_gt_xy=None,
     ):
         """
         Sample trajectory predictions and average over multiple stochastic draws.
         """
+        del oracle_gt_xy
         self.sample_key, key = jr.split(self.sample_key)
         sample_keys = jr.split(key, num_solutions)
         # The sampler returns one trajectory per random seed, then averages them

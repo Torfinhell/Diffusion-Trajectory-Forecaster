@@ -14,6 +14,7 @@ from src.models.base_model_eval import (
     batch_coord_scale,
     log_images,
     mask_pred_for_plot,
+    metric_log_name,
     on_validation_epoch_end as run_validation_epoch_end,
     plot_vis_kwargs,
     to_metric_frame,
@@ -65,8 +66,7 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                         self.optim.update,
                     )
                 )
-            self._train_loss_sum = self._train_loss_sum + jnp.asarray(value)
-            self._train_loss_count += 1
+            self.train_loss_tracker.update("train_loss", jnp.asarray(value))
             self.global_step_ += 1
             if (
                 self._should_run_metrics_this_epoch("train")
@@ -85,15 +85,11 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                 val_key,
                 use_oracle=self._oracle_enabled("use_for_val_loss"),
             )
-            self._val_loss_sum = self._val_loss_sum + jnp.asarray(value)
-            self._val_loss_count += 1
+            self.val_loss_tracker.update("val_loss", jnp.asarray(value))
             if self._proxy_val_enabled():
                 self.loader_key, proxy_key = jr.split(self.loader_key)
                 proxy_value = self.compute_proxy_batch_loss(batch, proxy_key)
-                self._val_proxy_loss_sum = self._val_proxy_loss_sum + jnp.asarray(
-                    proxy_value
-                )
-                self._val_proxy_loss_count += 1
+                self.val_loss_tracker.update("val_proxy_loss", jnp.asarray(proxy_value))
             if (
                 self.metrics is not None
                 and self._should_run_metrics_this_epoch("val")
@@ -150,17 +146,14 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
         return first_pred_xy, None
 
     def on_train_epoch_end(self) -> None:
-        if self._train_loss_count > 0:
-            avg_train_loss = float(
-                jnp.asarray(self._train_loss_sum / self._train_loss_count)
-            )
+        train_losses = self.train_loss_tracker.result()
+        if "train_loss" in train_losses:
             self.log(
-                "Train_Loss",
-                avg_train_loss,
+                metric_log_name("train", "loss"),
+                train_losses["train_loss"],
                 prog_bar=True,
                 on_step=False,
                 on_epoch=True,
-                batch_size=self._train_loss_count,
             )
         if not self._should_run_metrics_this_epoch("train"):
             self._train_batches_for_metrics.clear()
@@ -213,9 +206,12 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                     )
 
         vals = self.metrics_train.compute()
-        log_dict = {f"Train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
+        log_dict = {
+            metric_log_name("train", k): float(jnp.asarray(v))
+            for k, v in vals.items()
+        }
         if denoise_metric_vals:
-            log_dict["Train/OneStepDenoise_ADE"] = float(
+            log_dict[metric_log_name("train", "one_step_denoise_ade")] = float(
                 sum(denoise_metric_vals) / len(denoise_metric_vals)
             )
         self.log_dict(log_dict, prog_bar=True)
