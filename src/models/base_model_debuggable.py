@@ -26,6 +26,7 @@ from src.models.base_model_oracle import (
     oracle_sampling_mode,
     sampling_t0,
 )
+from src.models.base_model_proxy import compute_proxy_batch_loss
 
 
 class DebuggableBaseDiffusionModel(BaseDiffusionModel):
@@ -86,9 +87,9 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                 use_oracle=self._oracle_enabled("use_for_val_loss"),
             )
             self.val_loss_tracker.update("val_loss", jnp.asarray(value))
-            if self._proxy_val_enabled():
+            if bool(self.proxy_val_cfg.get("enabled", False)):
                 self.loader_key, proxy_key = jr.split(self.loader_key)
-                proxy_value = self.compute_proxy_batch_loss(batch, proxy_key)
+                proxy_value = compute_proxy_batch_loss(self, batch, proxy_key)
                 self.val_loss_tracker.update("val_proxy_loss", jnp.asarray(proxy_value))
             if (
                 self.metrics is not None
@@ -110,7 +111,12 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
         self, metrics, batch, return_first_prediction=False
     ):
         first_pred_xy = None
-        num_solutions = self._num_metric_trajectory_samples()
+        num_solutions = int(
+            self.vis.get(
+                "num_trajectory_samples",
+                self.vis.get("sample_steps", 1),
+            )
+        )
         debug_metrics = bool(self.vis.get("debug_metrics", False))
 
         # The debug subclass keeps the same metric flow as the base class, but
@@ -200,8 +206,11 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                         batch["origin_xy"][0],
                     )
                     train_images.append(
-                        self._render_prediction_image(
-                            viz_state, first_pred_xy_world, vis_plot_kwargs
+                        plot_simulator_state(
+                            viz_state,
+                            batch_idx=0,
+                            pred_xy=first_pred_xy_world,
+                            **vis_plot_kwargs,
                         )
                     )
 

@@ -62,7 +62,12 @@ def batch_coord_scale(batch, sample_idx):
 
 def update_metrics_for_batch(model, metrics, batch, return_first_prediction=False):
     first_pred_xy = None
-    num_solutions = model._num_metric_trajectory_samples()
+    num_solutions = int(
+        model.vis.get(
+            "num_trajectory_samples",
+            model.vis.get("sample_steps", 1),
+        )
+    )
 
     for sample_idx in range(batch["gt_xy"].shape[0]):
         # Sampling stays in the model's normalized frame; metrics are computed
@@ -170,7 +175,7 @@ def on_validation_epoch_end(model):
             on_step=False,
             on_epoch=True,
         )
-    if model._proxy_val_enabled() and "val_proxy_loss" in val_losses:
+    if bool(model.proxy_val_cfg.get("enabled", False)) and "val_proxy_loss" in val_losses:
         model.log(
             metric_log_name("val", "proxy_loss"),
             val_losses["val_proxy_loss"],
@@ -212,8 +217,11 @@ def on_validation_epoch_end(model):
                     first_pred_xy_plot, batch["origin_xy"][0]
                 )
                 images.append(
-                    model._render_prediction_image(
-                        viz_state, first_pred_xy_world, plot_kwargs
+                    plot_simulator_state(
+                        viz_state,
+                        batch_idx=0,
+                        pred_xy=first_pred_xy_world,
+                        **plot_kwargs,
                     )
                 )
 

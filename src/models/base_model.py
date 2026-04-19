@@ -5,7 +5,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import numpy as np
 import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
@@ -16,7 +15,7 @@ from src.models.base_model_eval import (
     on_validation_epoch_end as run_validation_epoch_end,
 )
 from src.models.base_model_eval import update_metrics_for_batch
-from src.visualization.viz import plot_simulator_state
+from src.models.base_model_proxy import compute_proxy_batch_loss
 
 
 class BaseDiffusionModel(L.LightningModule):
@@ -160,9 +159,9 @@ class BaseDiffusionModel(L.LightningModule):
             self.loader_key, val_key = jr.split(self.loader_key)
             value = self.compute_batch_loss(batch, val_key)
             self.val_loss_tracker.update("val_loss", jnp.asarray(value))
-            if self._proxy_val_enabled():
+            if bool(self.proxy_val_cfg.get("enabled", False)):
                 self.loader_key, proxy_key = jr.split(self.loader_key)
-                proxy_value = self.compute_proxy_batch_loss(batch, proxy_key)
+                proxy_value = compute_proxy_batch_loss(self, batch, proxy_key)
                 self.val_loss_tracker.update("val_proxy_loss", jnp.asarray(proxy_value))
             # collect some first batches to compute metrics on
             if (
@@ -209,21 +208,9 @@ class BaseDiffusionModel(L.LightningModule):
         # Override hook for debug subclass
         return "exact"
 
-    def _metric_every_n_epochs(self, split):
-        key = f"{split}_metric_every_n_epochs"
-        return max(1, int(self.trainer_cfg.get(key, 1)))
-
     def _should_run_metrics_this_epoch(self, split):
-        every_n = self._metric_every_n_epochs(split)
+        every_n = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
         return (int(self.current_epoch) + 1) % every_n == 0
-
-    def _num_metric_trajectory_samples(self):
-        return int(
-            self.vis.get(
-                "num_trajectory_samples",
-                self.vis.get("sample_steps", 1),
-            )
-        )
 
     def _upload_artifact(self, name, path, metadata=None):
         logger = getattr(self, "logger", None)
@@ -238,6 +225,7 @@ class BaseDiffusionModel(L.LightningModule):
         return alpha, sigma
 
     def compute_batch_loss(self, batch, key):
+        # debug class overrides it
         return self.batch_loss_fn(
             self.model,
             self.weight,
@@ -349,40 +337,6 @@ class BaseDiffusionModel(L.LightningModule):
         self.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
         eqx.tree_serialise_leaves(self.CHECKPOINT_PATH, self.model)
 
-    def _proxy_val_enabled(self) -> bool:
-        return bool(self.proxy_val_cfg.get("enabled", False))
-
-    def _proxy_t_values(self):
-        step_stride = max(1, int(self.proxy_val_cfg.get("step_stride", 5)))
-        include_last = bool(self.proxy_val_cfg.get("include_last", True))
-        t0 = float(self._sampling_t0())
-        t1 = float(self.t1)
-        dt0 = abs(float(getattr(self, "dt0", 0.01)))
-        num_steps = max(1, int(np.ceil((t1 - t0) / dt0)))
-        ts = np.linspace(t0, t1, num_steps + 1, dtype=np.float32)[1:]
-        selected = ts[step_stride - 1 :: step_stride]
-        if include_last and (len(selected) == 0 or selected[-1] != ts[-1]):
-            selected = np.concatenate([selected, ts[-1:]])
-        return jnp.asarray(selected, dtype=jnp.float32)
-
-    def compute_proxy_batch_loss(self, batch, key):
-        t_values = self._proxy_t_values()
-        keys = jr.split(key, int(t_values.shape[0]))
-
-        def loss_at_t(t, loss_key):
-            return self.batch_loss_fn_fixed_t(
-                self.model,
-                self.weight,
-                self.int_beta,
-                self.prediction_target,
-                batch,
-                t,
-                loss_key,
-            )
-
-        losses = jax.vmap(loss_at_t)(t_values, keys)
-        return jnp.mean(losses)
-
     def _log_model_artifact(self) -> None:
         logger = getattr(self, "logger", None)
         if logger is None:
@@ -401,15 +355,9 @@ class BaseDiffusionModel(L.LightningModule):
             },
         )
 
-    def _render_prediction_image(self, viz_state, pred_xy_world, plot_kwargs):
-        return plot_simulator_state(
-            viz_state,
-            batch_idx=0,
-            pred_xy=pred_xy_world,
-            **plot_kwargs,
-        )
 
     def _update_metrics_for_batch(self, metrics, batch, return_first_prediction=False):
+        # debug subclass overrides it
         return update_metrics_for_batch(
             self,
             metrics,
