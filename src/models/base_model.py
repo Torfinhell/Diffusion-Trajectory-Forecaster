@@ -10,12 +10,12 @@ import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
 
-from src.metrics import MetricCollection
+from src.metrics import MetricCollection, Static_metrics
+from src.models.base_model_eval import on_train_epoch_end as run_train_epoch_end
 from src.models.base_model_eval import (
-    on_train_epoch_end as run_train_epoch_end,
     on_validation_epoch_end as run_validation_epoch_end,
-    update_metrics_for_batch,
 )
+from src.models.base_model_eval import update_metrics_for_batch
 from src.visualization.viz import plot_simulator_state
 
 
@@ -28,10 +28,8 @@ class BaseDiffusionModel(L.LightningModule):
         seed,
         load_last_checkpoint,
         cfg_metrics,
-        grad_clip,
         vis_cfg,
         trainer_cfg=None,
-        oracle_cfg=None,
         prediction_target="x0",
         **kwargs,
     ):
@@ -42,10 +40,8 @@ class BaseDiffusionModel(L.LightningModule):
         self.key, key_model, self.train_key, self.loader_key, self.sample_key = (
             jax.random.split(self.key, 5)
         )
-        self.metrics = cfg_metrics
         self.vis = vis_cfg
         self.trainer_cfg = trainer_cfg or {}
-        self.grad_clip = grad_clip
         self.load_last_checkpoint = load_last_checkpoint
         self.samples = 10
         self.global_step_ = 0  # TODO
@@ -53,7 +49,10 @@ class BaseDiffusionModel(L.LightningModule):
             [instantiate(m) for m in self.metrics.train]
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
-        self._train_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+        self.losses = Static_metrics(
+            "val_loss",
+            "train_loss",
+        )
         self._train_loss_count = 0
         self._val_loss_sum = jnp.array(0.0, dtype=jnp.float32)
         self._val_loss_count = 0
@@ -61,9 +60,7 @@ class BaseDiffusionModel(L.LightningModule):
         self._val_proxy_loss_count = 0
         self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
         self._val_batches_for_metrics = []
-        self.train_metric_batches = int(
-            self.trainer_cfg.get("train_metric_batches", 3)
-        )
+        self.train_metric_batches = int(self.trainer_cfg.get("train_metric_batches", 3))
         self._train_batches_for_metrics = []
         self.metrics_prefix = "Val"
         self.prediction_target = str(prediction_target).lower()
@@ -170,8 +167,7 @@ class BaseDiffusionModel(L.LightningModule):
                 self._val_proxy_loss_count += 1
             # collect some first batches to compute metrics on
             if (
-                self.metrics is not None
-                and self._should_run_metrics_this_epoch("val")
+                self._should_run_metrics_this_epoch("val")
                 and len(self._val_batches_for_metrics) < self.val_metric_batches
             ):
                 self._val_batches_for_metrics.append(batch)
@@ -206,10 +202,6 @@ class BaseDiffusionModel(L.LightningModule):
             return float(self.t0)
         return 1e-3
 
-    def _oracle_enabled(self, key):
-        del key
-        return False
-
     def _metric_every_n_epochs(self, split):
         key = f"{split}_metric_every_n_epochs"
         return max(1, int(self.trainer_cfg.get(key, 1)))
@@ -238,27 +230,7 @@ class BaseDiffusionModel(L.LightningModule):
         sigma = jnp.sqrt(jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5))
         return alpha, sigma
 
-    def _prediction_to_target(self, gt_xy, noise, std):
-        if self.prediction_target == "x0":
-            return gt_xy
-        if self.prediction_target == "epsilon":
-            return noise
-        if self.prediction_target == "score":
-            return -noise / jnp.maximum(std, 1e-5)
-        raise ValueError(f"Unsupported prediction_target '{self.prediction_target}'")
-
-    def _prediction_to_x0(self, pred, x_t, t):
-        alpha, sigma = self._alpha_sigma(self.int_beta, t)
-        if self.prediction_target == "x0":
-            return pred
-        if self.prediction_target == "epsilon":
-            return (x_t - sigma * pred) / jnp.maximum(alpha, 1e-5)
-        if self.prediction_target == "score":
-            return (x_t + (sigma**2) * pred) / jnp.maximum(alpha, 1e-5)
-        raise ValueError(f"Unsupported prediction_target '{self.prediction_target}'")
-
-    def compute_batch_loss(self, batch, key, use_oracle=False):
-        del use_oracle
+    def compute_batch_loss(self, batch, key):
         return self.batch_loss_fn(
             self.model,
             self.weight,
@@ -280,8 +252,6 @@ class BaseDiffusionModel(L.LightningModule):
 		by sampling very evenly by sampling uniformly and independently from (t1-t0)/batch_size bins
 		t = [U(0,1), U(1,2), U(2,3), ...]
 		"""
-        # t = jr.uniform(tkey, (batch_size,), minval=0, maxval=t1 / batch_size)
-        # t = t + (t1 / batch_size) * jnp.arange(batch_size)
         t_min = min(0.1, float(t1) * 0.5)
         t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t1)
         """ Fixing the first three arguments of single_loss_fn, leaving batch, t and key as input """
@@ -296,7 +266,9 @@ class BaseDiffusionModel(L.LightningModule):
         return jnp.mean(loss_fn(batch, t, losskey))
 
     @staticmethod
-    def batch_loss_fn_fixed_t(model, weight, int_beta, prediction_target, batch, t, key):
+    def batch_loss_fn_fixed_t(
+        model, weight, int_beta, prediction_target, batch, t, key
+    ):
         batch_size = batch["gt_xy"].shape[0]
         losskey = jr.split(key, batch_size)
         t = jnp.full((batch_size,), t, dtype=jnp.float32)
@@ -331,16 +303,7 @@ class BaseDiffusionModel(L.LightningModule):
         std = jnp.sqrt(var)
         noise = jr.normal(key, INPUT_DIM)
         y = mean + std * noise
-        pred = model(t, y, batch["context"])
-        if prediction_target == "x0":
-            target = batch["gt_xy"]
-        elif prediction_target == "epsilon":
-            target = noise
-        elif prediction_target == "score":
-            target = -noise / jnp.maximum(std, 1e-5)
-        else:
-            raise ValueError(f"Unsupported prediction_target '{prediction_target}'")
-        err = (pred - target) ** 2
+        err = (model(t, y, batch["context"]) - batch["gt_xy"]) ** 2
         loss = (err * batch["gt_xy_mask"]).sum() / jnp.maximum(
             batch["gt_xy_mask"].sum(), 1.0
         )
@@ -421,7 +384,6 @@ class BaseDiffusionModel(L.LightningModule):
         logger = getattr(self, "logger", None)
         if logger is None:
             return
-
         artifact_name = f"{getattr(logger, 'name', 'model')}-model"
         version = getattr(logger, "version", None)
         if version:
@@ -444,9 +406,7 @@ class BaseDiffusionModel(L.LightningModule):
             **plot_kwargs,
         )
 
-    def _update_metrics_for_batch(
-        self, metrics, batch, return_first_prediction=False
-    ):
+    def _update_metrics_for_batch(self, metrics, batch, return_first_prediction=False):
         return update_metrics_for_batch(
             self,
             metrics,
@@ -460,7 +420,6 @@ class BaseDiffusionModel(L.LightningModule):
         num_solutions=1,
         predict_shape=None,
         save_full=False,
-        oracle_gt_xy=None,
     ):
         """
         Sample trajectory predictions and average over multiple stochastic draws.
@@ -477,7 +436,6 @@ class BaseDiffusionModel(L.LightningModule):
             t1=self.t1,
             context=context,
             save_full=save_full,
-            oracle_gt_xy=oracle_gt_xy,
             key=kk,
         )[0]
         pred_samples = jax.vmap(sample_one)(sample_keys)
@@ -493,7 +451,6 @@ class BaseDiffusionModel(L.LightningModule):
         t1,
         context,
         save_full=False,
-        oracle_gt_xy=None,
         key=None,
     ):
         """
@@ -515,27 +472,8 @@ class BaseDiffusionModel(L.LightningModule):
             alpha_cur, sigma_cur = self._alpha_sigma(int_beta, t_cur)
             alpha_next, sigma_next = self._alpha_sigma(int_beta, t_next)
             pred = model(t_cur, x, context)
-            if self.prediction_target == "x0":
-                x0_pred = pred
-                eps_pred = (x - alpha_cur * x0_pred) / jnp.maximum(
-                    sigma_cur, 1e-5
-                )
-            elif self.prediction_target == "epsilon":
-                eps_pred = pred
-                x0_pred = (x - sigma_cur * eps_pred) / jnp.maximum(
-                    alpha_cur, 1e-5
-                )
-            elif self.prediction_target == "score":
-                score_pred = pred
-                eps_pred = -sigma_cur * score_pred
-                x0_pred = (x + (sigma_cur**2) * score_pred) / jnp.maximum(
-                    alpha_cur, 1e-5
-                )
-            else:
-                raise ValueError(
-                    f"Unsupported prediction_target '{self.prediction_target}'"
-                )
-            x = alpha_next * x0_pred + sigma_next * eps_pred
+            eps_pred = (x - alpha_cur * pred) / jnp.maximum(sigma_cur, 1e-5)
+            x = alpha_next * pred + sigma_next * eps_pred
             if save_full:
                 path.append(x)
         if save_full:

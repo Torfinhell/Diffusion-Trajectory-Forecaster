@@ -2,8 +2,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from torch.utils.data import IterableDataset
+import webdataset as wds
 from hydra.utils import to_absolute_path
+from torch.utils.data import IterableDataset
 
 from src.data_module.dataset_creation import (
     WEBDATASET_FORMAT,
@@ -55,14 +56,8 @@ def _unwrap_payload(sample: dict):
         payload = {key: value for key, value in payload.items() if key != "__key__"}
     return payload
 
-def build_webdataset(split_cfg, is_train: bool):
-    try:
-        import webdataset as wds
-    except ImportError as exc:
-        raise RuntimeError(
-            "WebDataset loading requires the 'webdataset' package to be installed."
-        ) from exc
 
+def build_webdataset(split_cfg, is_train: bool):
     output_root = _ensure_local_webdataset(
         processed_path=split_cfg.processed_path,
         dvc_file=split_cfg.get("dvc_file"),
