@@ -1,0 +1,18 @@
+# @package _global_
+data:
+  train:
+    dvc_file: "data/small_base_v2_no_scenes.dvc"
+    processed_path: "data/small_base_v2_no_scenes/train_small_base_v2_no_scenes.pkl"
+    storage_format: directory_chunks
+    shuffle_buffer: 256
+    chunk_cache_size: 8
+  val:
+    dvc_file: "data/small_base_v2_no_scenes.dvc"
+    processed_path: "data/small_base_v2_no_scenes/val_small_base_v2_no_scenes.pkl"
+    storage_format: directory_chunks
+    chunk_cache_size: 8
+  test:
+    dvc_file: "data/small_base_v2_no_scenes.dvc"
+    processed_path: "data/small_base_v2_no_scenes/test_small_base_v2_no_scenes.pkl"
+    storage_format: directory_chunks
+    chunk_cache_size: 8

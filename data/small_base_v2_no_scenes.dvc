@@ -1,0 +1,6 @@
+outs:
+- md5: a49ccf935ab2051e0ba89b715ca95cd7.dir
+  size: 246654563
+  nfiles: 9
+  hash: md5
+  path: small_base_v2_no_scenes
