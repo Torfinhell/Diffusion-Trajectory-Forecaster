@@ -29,6 +29,7 @@ class BaseDiffusionModel(L.LightningModule):
         load_last_checkpoint,
         cfg_metrics,
         vis_cfg,
+        grad_clip=None,
         trainer_cfg=None,
         prediction_target="x0",
         **kwargs,
@@ -43,6 +44,9 @@ class BaseDiffusionModel(L.LightningModule):
         self.metrics = cfg_metrics
         self.vis = vis_cfg
         self.trainer_cfg = trainer_cfg or {}
+        self.grad_clip = None if grad_clip is None else float(grad_clip)
+        if self.grad_clip is not None and self.grad_clip <= 0:
+            self.grad_clip = None
         self.load_last_checkpoint = load_last_checkpoint
         self.samples = 10
         self.global_step_ = 0  # TODO
@@ -116,6 +120,13 @@ class BaseDiffusionModel(L.LightningModule):
             )
 
         raise ValueError(f"Unsupported lr scheduler '{name}'")
+
+    def build_optimizer(self, learning_rate):
+        transforms = []
+        if self.grad_clip is not None:
+            transforms.append(optax.clip_by_global_norm(self.grad_clip))
+        transforms.append(optax.adam(learning_rate))
+        return optax.chain(*transforms)
 
     def training_step(self, batch):
         with jax.profiler.StepTraceAnnotation("train", step_num=int(self.global_step_)):

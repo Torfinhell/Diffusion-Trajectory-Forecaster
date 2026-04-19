@@ -61,7 +61,7 @@ class _DiffusionLinearBase:
         )
 
     def configure_optimizers(self):
-        self.optim = optax.adam(self.build_learning_rate(self.lr))
+        self.optim = self.build_optimizer(self.build_learning_rate(self.lr))
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
 
     def configure_ddpm_scheduler(self):
