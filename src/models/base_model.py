@@ -5,6 +5,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
@@ -12,20 +13,21 @@ from hydra.utils import instantiate
 from src.metrics import MetricCollection, MetricTracker
 from src.models.base_model_eval import on_train_epoch_end as run_train_epoch_end
 from src.models.base_model_eval import (
+    on_test_epoch_end as run_test_epoch_end,
     on_validation_epoch_end as run_validation_epoch_end,
 )
 from src.models.base_model_eval import update_metrics_for_batch
 from src.models.base_model_proxy import compute_proxy_batch_loss
+from src.utils import build_checkpoint_run_directory
 
 
 class BaseDiffusionModel(L.LightningModule):
-    CHECKPOINT_DIR = Path("checkpoints/ScoreBased")
-    CHECKPOINT_PATH = CHECKPOINT_DIR / "last.eqx"
+    CHECKPOINT_ROOT = Path("checkpoints")
 
     def __init__(
         self,
         seed,
-        load_last_checkpoint,
+        load_best_checkpoint,
         cfg_metrics,
         vis_cfg,
         grad_clip=None,
@@ -46,13 +48,16 @@ class BaseDiffusionModel(L.LightningModule):
         self.grad_clip = None if grad_clip is None else float(grad_clip)
         if self.grad_clip is not None and self.grad_clip <= 0:
             self.grad_clip = None
-        self.load_last_checkpoint = load_last_checkpoint
+        self.load_best_checkpoint_flag = load_best_checkpoint
         self.samples = 10
         self.global_step_ = 0  # TODO
         self.metrics_train = MetricCollection(
             [instantiate(m) for m in self.metrics.train]
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
+        self.metrics_test = MetricCollection(
+            [instantiate(m) for m in self.metrics.val]
+        )
         self.train_loss_tracker = MetricTracker("train_loss")
         self.val_loss_tracker = MetricTracker("val_loss", "val_proxy_loss")
         self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
@@ -66,6 +71,19 @@ class BaseDiffusionModel(L.LightningModule):
                 "Use one of: x0, epsilon, score."
             )
         self.proxy_val_cfg = self.trainer_cfg.get("proxy_val_loss", {})
+        default_best_metric = (
+            "val_proxy_loss" if self.proxy_val_cfg.get("enabled", False) else "val_loss"
+        )
+        self.best_checkpoint_metric = str(
+            self.trainer_cfg.get("best_checkpoint_metric", default_best_metric)
+        )
+        self.best_checkpoint_mode = str(
+            self.trainer_cfg.get("best_checkpoint_mode", "min")
+        ).lower()
+        self.best_checkpoint_score = (
+            float("inf") if self.best_checkpoint_mode == "min" else float("-inf")
+        )
+        self.best_checkpoint_epoch = None
         self.model = self.get_model(key_model)
         self.configure_ddpm_scheduler()
         self.configure_optimizers()
@@ -170,6 +188,14 @@ class BaseDiffusionModel(L.LightningModule):
             ):
                 self._val_batches_for_metrics.append(batch)
 
+    def test_step(self, batch):
+        with jax.profiler.StepTraceAnnotation("test", step_num=int(self.current_epoch)):
+            self._update_metrics_for_batch(
+                self.metrics_test,
+                batch,
+                return_first_prediction=False,
+            )
+
     @staticmethod
     @eqx.filter_jit
     def make_step(
@@ -217,6 +243,37 @@ class BaseDiffusionModel(L.LightningModule):
         if logger is None or not hasattr(logger, "upload_artifact"):
             return
         logger.upload_artifact(name=name, path=path, metadata=metadata)
+
+    def _checkpoint_run_dir(self) -> Path:
+        logger = getattr(self, "logger", None)
+        return build_checkpoint_run_directory(self.CHECKPOINT_ROOT, logger)
+
+    def _best_checkpoint_path(self) -> Path:
+        return self._checkpoint_run_dir() / "best.eqx"
+
+    def _maybe_save_best_checkpoint(self, metrics) -> None:
+        metric_value = metrics.get(self.best_checkpoint_metric)
+        if metric_value is None:
+            return
+
+        score = float(jnp.asarray(metric_value))
+        improved = (
+            score < self.best_checkpoint_score
+            if self.best_checkpoint_mode == "min"
+            else score > self.best_checkpoint_score
+        )
+        if not improved:
+            return
+
+        checkpoint_path = self._best_checkpoint_path()
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        eqx.tree_serialise_leaves(checkpoint_path, self.model)
+        self.best_checkpoint_score = score
+        self.best_checkpoint_epoch = int(self.current_epoch)
+        print(
+            f"Saved best checkpoint to {checkpoint_path} "
+            f"({self.best_checkpoint_metric}={score:.6f})"
+        )
 
     @staticmethod
     def _alpha_sigma(int_beta, t):
@@ -305,19 +362,15 @@ class BaseDiffusionModel(L.LightningModule):
         return loss
 
     def on_fit_start(self) -> None:
-        Path("checkpoints").mkdir(exist_ok=True)
+        self.CHECKPOINT_ROOT.mkdir(exist_ok=True)
         print(self.hparams)
-        if self.load_last_checkpoint:
+        if self.load_best_checkpoint_flag:
             try:
-                self.model = eqx.tree_deserialise_leaves(
-                    self.CHECKPOINT_PATH, self.model
-                )
-                print("Loaded weights")
+                self.load_best_checkpoint()
             except:
                 print("Didnt load weights")
 
     def on_fit_end(self):
-        self._save_local_checkpoint()
         self._log_model_artifact()
 
     def on_train_epoch_start(self) -> None:
@@ -330,30 +383,46 @@ class BaseDiffusionModel(L.LightningModule):
         self.val_loss_tracker.reset()
 
     def on_validation_epoch_end(self) -> None:
-        self._save_local_checkpoint()
         return run_validation_epoch_end(self)
 
-    def _save_local_checkpoint(self) -> None:
-        self.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-        eqx.tree_serialise_leaves(self.CHECKPOINT_PATH, self.model)
+    def on_test_epoch_start(self) -> None:
+        self.metrics_test.reset()
+
+    def on_test_epoch_end(self) -> None:
+        return run_test_epoch_end(self)
 
     def _log_model_artifact(self) -> None:
         logger = getattr(self, "logger", None)
         if logger is None:
             return
-        artifact_name = f"{getattr(logger, 'name', 'model')}-model"
+        checkpoint_path = self._best_checkpoint_path()
+        if not checkpoint_path.exists():
+            return
+
+        artifact_name = f"{getattr(logger, 'name', 'model')}-best-model"
         version = getattr(logger, "version", None)
         if version:
             artifact_name = f"{artifact_name}-{version}"
 
         self._upload_artifact(
             name=artifact_name,
-            path=self.CHECKPOINT_PATH,
+            path=checkpoint_path,
             metadata={
-                "epoch": int(self.current_epoch),
-                "global_step": int(self.global_step),
+                "epoch": self.best_checkpoint_epoch,
+                "global_step": int(self.global_step_),
+                "monitor_metric": self.best_checkpoint_metric,
+                "monitor_mode": self.best_checkpoint_mode,
+                "monitor_score": self.best_checkpoint_score,
             },
         )
+
+    def load_best_checkpoint(self) -> bool:
+        checkpoint_path = self._best_checkpoint_path()
+        if not checkpoint_path.exists():
+            return False
+        self.model = eqx.tree_deserialise_leaves(checkpoint_path, self.model)
+        print(f"Loaded best checkpoint from {checkpoint_path}")
+        return True
 
 
     def _update_metrics_for_batch(self, metrics, batch, return_first_prediction=False):

@@ -15,6 +15,7 @@ from src.models.base_model_eval import (
     log_images,
     mask_pred_for_plot,
     metric_log_name,
+    on_test_epoch_end as run_test_epoch_end,
     on_validation_epoch_end as run_validation_epoch_end,
     plot_vis_kwargs,
     to_metric_frame,
@@ -97,6 +98,14 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                 and len(self._val_batches_for_metrics) < self.val_metric_batches
             ):
                 self._val_batches_for_metrics.append(batch)
+
+    def test_step(self, batch):
+        with jax.profiler.StepTraceAnnotation("test", step_num=int(self.current_epoch)):
+            self._update_metrics_for_batch(
+                self.metrics_test,
+                batch,
+                return_first_prediction=False,
+            )
 
     def compute_batch_loss(self, batch, key, use_oracle=False):
         return compute_oracle_batch_loss(self, batch, key, use_oracle=use_oracle)
@@ -237,8 +246,10 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
         self._train_batches_for_metrics.clear()
 
     def on_validation_epoch_end(self) -> None:
-        self._save_local_checkpoint()
         return run_validation_epoch_end(self)
+
+    def on_test_epoch_end(self) -> None:
+        return run_test_epoch_end(self)
 
     def sample_multiple_sol(
         self,

@@ -166,6 +166,7 @@ def on_train_epoch_end(model):
 
 
 def on_validation_epoch_end(model):
+    checkpoint_metrics = {}
     val_losses = model.val_loss_tracker.result()
     if "val_loss" in val_losses:
         model.log(
@@ -175,6 +176,7 @@ def on_validation_epoch_end(model):
             on_step=False,
             on_epoch=True,
         )
+    checkpoint_metrics.update(val_losses)
     if bool(model.proxy_val_cfg.get("enabled", False)) and "val_proxy_loss" in val_losses:
         model.log(
             metric_log_name("val", "proxy_loss"),
@@ -184,9 +186,11 @@ def on_validation_epoch_end(model):
             on_epoch=True,
         )
     if not model._should_run_metrics_this_epoch("val"):
+        model._maybe_save_best_checkpoint(checkpoint_metrics)
         model._val_batches_for_metrics.clear()
         return
     if len(model.metrics_val) == 0 or len(model._val_batches_for_metrics) == 0:
+        model._maybe_save_best_checkpoint(checkpoint_metrics)
         return
 
     enable_visualization = bool(model.vis.get("enable_visualization", False))
@@ -235,4 +239,15 @@ def on_validation_epoch_end(model):
     vals = model.metrics_val.compute()
     log_dict = {metric_log_name("val", k): float(jnp.asarray(v)) for k, v in vals.items()}
     model.log_dict(log_dict, prog_bar=True)
+    checkpoint_metrics.update(log_dict)
+    model._maybe_save_best_checkpoint(checkpoint_metrics)
     model._val_batches_for_metrics.clear()
+
+
+def on_test_epoch_end(model):
+    if len(model.metrics_test) == 0:
+        return
+
+    vals = model.metrics_test.compute()
+    log_dict = {metric_log_name("test", k): float(jnp.asarray(v)) for k, v in vals.items()}
+    model.log_dict(log_dict, prog_bar=True)

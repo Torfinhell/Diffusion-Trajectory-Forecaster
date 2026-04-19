@@ -110,6 +110,10 @@ def main(cfg) -> None:
         _recursive_=False,
     )
     trainer.fit(diff_model, dm)
+    if diff_model.load_best_checkpoint():
+        trainer.test(diff_model, dm)
+    else:
+        print("Best checkpoint was not found. Skipping test run.")
 
 
 if __name__ == "__main__":
