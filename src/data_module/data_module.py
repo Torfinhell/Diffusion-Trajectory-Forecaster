@@ -39,6 +39,9 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         super().__init__()
         self.cfg_data = cfg_data
         self.cfg_dl = cfg_dl
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
 
     def _dataset(self, split):
         split_cfg = self.cfg_data[split]
@@ -57,6 +60,7 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
 
     def setup(self, stage):
         if stage in (None, "fit"):
+            self.train_dataset = self._dataset("train")
             self.val_dataset = self._dataset("val")
         elif stage == "test":
             self.test_dataset = self._dataset("test")
@@ -68,7 +72,8 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         return batch
 
     def train_dataloader(self):
-        self.train_dataset = self._dataset("train")
+        if self.train_dataset is None:
+            self.train_dataset = self._dataset("train")
         loader_cfg = self._loader_cfg_dict(self.cfg_dl.train)
         sampler_cfg = loader_cfg.pop("chunk_sampler", None)
         storage_format = str(self.cfg_data.train.get("storage_format", "")).lower()
