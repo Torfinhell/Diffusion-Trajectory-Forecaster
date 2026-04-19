@@ -51,7 +51,7 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
             key,
         )
 
-    batch_size = batch["gt_xy"].shape[0]
+    batch_size = batch["agent_future"].shape[0]
     tkey, losskey = jr.split(key)
     losskey = jr.split(losskey, batch_size)
     t = jr.uniform(tkey, (batch_size,), minval=0, maxval=model.t1 / batch_size)
@@ -59,12 +59,13 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
 
     losses = []
     for sample_idx in range(batch_size):
+        gt_xy = batch["agent_future"][sample_idx][..., :2]
         sample_batch = {
-            "gt_xy": batch["gt_xy"][sample_idx],
-            "gt_xy_mask": batch["gt_xy_mask"][sample_idx],
-            "context": batch["context"][sample_idx],
+            "agent_future": batch["agent_future"][sample_idx],
+            "agent_past": batch["agent_past"][sample_idx],
+            "agents_coeffs": batch["agents_coeffs"][sample_idx],
         }
-        oracle_model = make_oracle_model(model, sample_batch["gt_xy"])
+        oracle_model = make_oracle_model(model, gt_xy)
         losses.append(
             model.single_loss_fn(
                 oracle_model,

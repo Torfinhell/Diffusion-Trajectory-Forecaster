@@ -130,13 +130,14 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
 
         # The debug subclass keeps the same metric flow as the base class, but
         # can print per-sample diagnostics before the metric state is updated.
-        for sample_idx in range(batch["gt_xy"].shape[0]):
+        for sample_idx in range(batch["agent_future"].shape[0]):
+            gt_xy = batch["agent_future"][sample_idx][..., :2]
             pred_xy = self.sample_multiple_sol(
-                batch["context"][sample_idx],
+                batch["agent_past"][sample_idx],
                 num_solutions=num_solutions,
-                predict_shape=batch["gt_xy"][sample_idx].shape,
+                predict_shape=gt_xy.shape,
                 oracle_gt_xy=(
-                    batch["gt_xy"][sample_idx]
+                    gt_xy
                     if self._oracle_enabled("use_for_sampling")
                     else None
                 ),
@@ -144,16 +145,18 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
 
             coord_scale = batch_coord_scale(batch, sample_idx)
             pred_xy_metric = to_metric_frame(pred_xy, coord_scale)
-            gt_xy_metric = to_metric_frame(batch["gt_xy"][sample_idx], coord_scale)
+            gt_xy_metric = to_metric_frame(gt_xy, coord_scale)
+            agents_coeffs = batch["agents_coeffs"][sample_idx]
 
             if debug_metrics:
-                gt_mask = batch["gt_xy_mask"][sample_idx][..., 0].astype(bool)
-                debug_metric_sample(sample_idx, pred_xy_metric, gt_xy_metric, gt_mask)
+                debug_metric_sample(
+                    sample_idx, pred_xy_metric, gt_xy_metric, agents_coeffs
+                )
 
             metrics.update(
                 pred_xy_metric,
                 gt_xy_metric,
-                batch["gt_xy_mask"][sample_idx],
+                agents_coeffs,
             )
             if return_first_prediction and sample_idx == 0:
                 first_pred_xy = pred_xy_metric
@@ -208,7 +211,7 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                 viz_state = batch["scenario"]
                 if viz_state is not None:
                     first_pred_xy_plot = mask_pred_for_plot(
-                        first_pred_xy, batch["gt_xy_mask"][0]
+                        first_pred_xy, batch["agents_coeffs"][0]
                     )
                     first_pred_xy_world = to_world_frame(
                         first_pred_xy_plot,

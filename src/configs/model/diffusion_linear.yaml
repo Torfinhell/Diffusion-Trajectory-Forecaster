@@ -1,6 +1,6 @@
 _target_: src.models.DiffusionLinearModel
 seed: ${trainer.seed}
-load_last_checkpoint: ${trainer.load_last_checkpoint}
+load_best_checkpoint: ${trainer.load_best_checkpoint}
 cfg_metrics: ${metrics}
 grad_clip: ${trainer.gradient_clip_val}
 vis_cfg: ${visual}
@@ -13,5 +13,5 @@ oracle_cfg:
   sampling_mode: exact
   sampling_t0: 0.001
 hid_dim: 256
-input_shape: [32, 10, 2]
-output_shape: [32, 81, 2]
+input_shape: [32, 11, 9]
+output_shape: [32, 80, 2]

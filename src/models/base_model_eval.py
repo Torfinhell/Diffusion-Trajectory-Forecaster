@@ -41,16 +41,15 @@ def metric_log_name(split, name):
     return f"{split}_{name}"
 
 
-def mask_pred_for_plot(pred_xy, gt_xy_mask):
+def mask_pred_for_plot(pred_xy, agents_coeffs):
     pred_xy = jnp.asarray(pred_xy)
-    gt_xy_mask = jnp.asarray(gt_xy_mask)
-    # Metrics can use batched or unbatched masks; plotting only needs the shape
-    # to line up with the predicted trajectory being drawn.
-    while gt_xy_mask.ndim > pred_xy.ndim:
-        gt_xy_mask = jnp.squeeze(gt_xy_mask, axis=0)
-    while gt_xy_mask.ndim < pred_xy.ndim:
-        gt_xy_mask = gt_xy_mask[None, ...]
-    return jnp.where(gt_xy_mask.astype(bool), pred_xy, jnp.nan)
+    agents_coeffs = jnp.asarray(agents_coeffs)
+    while agents_coeffs.ndim > pred_xy.ndim - 2:
+        agents_coeffs = jnp.squeeze(agents_coeffs, axis=0)
+    while agents_coeffs.ndim < pred_xy.ndim - 2:
+        agents_coeffs = agents_coeffs[None, ...]
+    valid_agents = (agents_coeffs > 0)[..., None, None]
+    return jnp.where(valid_agents, pred_xy, jnp.nan)
 
 
 def batch_coord_scale(batch, sample_idx):
@@ -69,26 +68,27 @@ def update_metrics_for_batch(model, metrics, batch, return_first_prediction=Fals
         )
     )
 
-    for sample_idx in range(batch["gt_xy"].shape[0]):
+    for sample_idx in range(batch["agent_future"].shape[0]):
+        gt_xy = batch["agent_future"][sample_idx][..., :2]
         # Sampling stays in the model's normalized frame; metrics are computed
         # after restoring the per-scene coordinate scale.
         pred_xy = model.sample_multiple_sol(
-            batch["context"][sample_idx],
+            batch["agent_past"][sample_idx],
             num_solutions=num_solutions,
-            predict_shape=batch["gt_xy"][sample_idx].shape,
+            predict_shape=gt_xy.shape,
             oracle_gt_xy=(
-                batch["gt_xy"][sample_idx]
+                gt_xy
                 if model._oracle_enabled("use_for_sampling")
                 else None
             ),
         )
         coord_scale = batch_coord_scale(batch, sample_idx)
         pred_xy_metric = to_metric_frame(pred_xy, coord_scale)
-        gt_xy_metric = to_metric_frame(batch["gt_xy"][sample_idx], coord_scale)
+        gt_xy_metric = to_metric_frame(gt_xy, coord_scale)
         metrics.update(
             pred_xy_metric,
             gt_xy_metric,
-            batch["gt_xy_mask"][sample_idx],
+            batch["agents_coeffs"][sample_idx],
         )
         if return_first_prediction and sample_idx == 0:
             first_pred_xy = pred_xy_metric
@@ -134,7 +134,7 @@ def on_train_epoch_end(model):
             viz_state = batch["scenario"]
             if viz_state is not None:
                 first_pred_xy_plot = mask_pred_for_plot(
-                    first_pred_xy, batch["gt_xy_mask"][0]
+                    first_pred_xy, batch["agents_coeffs"][0]
                 )
                 first_pred_xy_world = to_world_frame(
                     first_pred_xy_plot,
@@ -215,7 +215,7 @@ def on_validation_epoch_end(model):
             viz_state = batch["scenario"]
             if viz_state is not None:
                 first_pred_xy_plot = mask_pred_for_plot(
-                    first_pred_xy, batch["gt_xy_mask"][0]
+                    first_pred_xy, batch["agents_coeffs"][0]
                 )
                 first_pred_xy_world = to_world_frame(
                     first_pred_xy_plot, batch["origin_xy"][0]

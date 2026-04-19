@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
-from .base import BaseMetric, temporal_valid_mask
+from .base import BaseMetric
 
 
 @dataclass
@@ -29,10 +29,13 @@ class AdeMetric(BaseMetric):
         self,
         pred_xy: jnp.ndarray,  # shape: (agents, H, 2)
         gt_xy: jnp.ndarray,  # shape: (agents, H, 2)
-        gt_mask: jnp.ndarray | None,  # shape: (agents, H) or (agents, H, 2)
+        agents_coeffs: jnp.ndarray | None,  # shape: (agents,)
     ) -> None:
         diff = pred_xy - gt_xy
         dist = jnp.sqrt(jnp.sum(diff**2, axis=-1))
-        mask = temporal_valid_mask(gt_xy, gt_mask).astype(jnp.float32)
-        self.state.sum_error += jnp.sum(dist * mask)
-        self.state.count += jnp.sum(mask)
+        if agents_coeffs is None:
+            weights = jnp.ones(gt_xy.shape[:-1], dtype=jnp.float32)
+        else:
+            weights = jnp.asarray(agents_coeffs, dtype=jnp.float32)[..., None]
+        self.state.sum_error += jnp.sum(dist * weights)
+        self.state.count += jnp.sum(weights)

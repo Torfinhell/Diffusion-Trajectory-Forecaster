@@ -296,7 +296,7 @@ class BaseDiffusionModel(L.LightningModule):
     @staticmethod
     def batch_loss_fn(model, weight, int_beta, prediction_target, batch, t1, key):
 
-        batch_size = batch["gt_xy"].shape[0]
+        batch_size = batch["agent_future"].shape[0]
         tkey, losskey = jr.split(key)
         losskey = jr.split(losskey, batch_size)
         """
@@ -321,7 +321,7 @@ class BaseDiffusionModel(L.LightningModule):
     def batch_loss_fn_fixed_t(
         model, weight, int_beta, prediction_target, batch, t, key
     ):
-        batch_size = batch["gt_xy"].shape[0]
+        batch_size = batch["agent_future"].shape[0]
         losskey = jr.split(key, batch_size)
         t = jnp.full((batch_size,), t, dtype=jnp.float32)
         loss_fn = partial(
@@ -349,16 +349,16 @@ class BaseDiffusionModel(L.LightningModule):
         :param key:
         :return:
         """
-        INPUT_DIM = batch["gt_xy"].shape
-        mean = batch["gt_xy"] * jnp.exp(-0.5 * int_beta(t))
+        gt_xy = batch["agent_future"][..., :2]
+        INPUT_DIM = gt_xy.shape
+        mean = gt_xy * jnp.exp(-0.5 * int_beta(t))
         var = jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5)
         std = jnp.sqrt(var)
         noise = jr.normal(key, INPUT_DIM)
         y = mean + std * noise
-        err = (model(t, y, batch["context"]) - batch["gt_xy"]) ** 2
-        loss = (err * batch["gt_xy_mask"]).sum() / jnp.maximum(
-            batch["gt_xy_mask"].sum(), 1.0
-        )
+        err = (model(t, y, batch["agent_past"]) - gt_xy) ** 2
+        weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[..., None, None]
+        loss = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
         return loss
 
     def on_fit_start(self) -> None:

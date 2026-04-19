@@ -1,7 +1,7 @@
 defaults:
   - model: diffusion_attn
   - dataloaders: basic
-  - data: small_base_wo_vis
+  - data: small_base_v2_no_scenes
   - transforms: null
   - logger: clearml
   - metrics: all_metrics
@@ -9,7 +9,7 @@ defaults:
   - visual: default
   - _self_
 trainer:
-  num_epochs: 150
+  num_epochs: 20
   train_epoch_len: 1.0
   val_epoch_len: 1.0
   gradient_clip_val: 5.0
@@ -17,14 +17,14 @@ trainer:
   seed: 1
   train_metric_batches: 1
   val_metric_batches: 1
-  train_metric_every_n_epochs: 130
-  val_metric_every_n_epochs: 130
+  train_metric_every_n_epochs: 20
+  val_metric_every_n_epochs: 20
   check_val_every_n_epoch: 1
   samples_per_scene: 1
   generate_every_epoch: 0
   print_hparams: False
   logging: "offline"
-  load_last_checkpoint: False
+  load_best_checkpoint: False
 
   enable_profiler: False
   enable_jax_profiler: False
@@ -32,6 +32,6 @@ trainer:
   jax_profiler_start_step: 2
   jax_profiler_num_steps: 3
   proxy_val_loss:
-    enabled: false
+    enabled: true
     step_stride: 5
     include_last: true

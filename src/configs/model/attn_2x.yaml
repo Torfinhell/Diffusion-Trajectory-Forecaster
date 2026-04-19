@@ -25,31 +25,31 @@ se_args:
   rnn_num_heads: 1
   sa_num_heads: 1
   drop_attn: 0.1
-  mlp_dim: 30
+  mlp_dim: 60
   num_mlp_layers: 2
   num_agents: ${model.num_agents}
   time_len: ${model.time_len}
   num_feat: ${model.num_feat}
-  out_dim: 20
+  out_dim: 40
   pos_emb_type: "lookup" #one of "rope", "lookup", "None"
   rope_theta: 0.1
 samlp_args:
   attn_dim: 160
   attn_num_heads: 1
-  mlp_dim: 30
+  mlp_dim: 60
   num_mlp_layers: 1
   drop_attn: 0.1
   out_dim: 160
-num_sa_mlp: 1
+num_sa_mlp: 2
 camlp_args:
   attn_dim: 160
   attn_num_heads: 1
-  mlp_dim: 30
+  mlp_dim: 60
   num_mlp_layers: 1
   drop_attn: 0.1
   out_dim: 160
-  kv_dim: 20
-num_camlp: 2
+  kv_dim: 40
+num_camlp: 4
 output_shape: [32, 80, 2]
 fourier_num_freqs: 80
 final_out_dim: 160
