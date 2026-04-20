@@ -1,6 +1,6 @@
 outs:
-- md5: 60d1c74551c3a1f54df8bd5433283efb.dir
-  size: 253748225
+- md5: ecab2fadede79baed8a32567f13de24b.dir
+  size: 253352553
   nfiles: 9
   hash: md5
   path: small_base_v2_no_scenes

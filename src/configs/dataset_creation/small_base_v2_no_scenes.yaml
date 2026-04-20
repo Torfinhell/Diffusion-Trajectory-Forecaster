@@ -12,6 +12,7 @@ dataset_creation:
   val:
     raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
     waymax_conf_version: "WOD_1_3_1_TRAINING"
+    start_index: 0
     num_states: 200
     max_num_objects: 32
     extract_scene: false
@@ -19,8 +20,9 @@ dataset_creation:
       current_index: 10
       use_full_agent_info: true
   test:
-    raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/testing/testing_tfexample.tfrecord@150"
+    raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
     waymax_conf_version: "WOD_1_3_1_TRAINING"
+    start_index: 200
     num_states: 100
     max_num_objects: 32
     extract_scene: false

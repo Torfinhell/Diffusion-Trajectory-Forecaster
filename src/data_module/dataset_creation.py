@@ -51,6 +51,7 @@ def iter_processed_samples(
     raw_data_url,
     waymax_conf_version,
     num_states,
+    start_index,
     max_num_objects,
     extract_scene,
     preprocess_kwargs,
@@ -60,7 +61,9 @@ def iter_processed_samples(
         waymax_conf_version=waymax_conf_version,
         max_num_objects=max_num_objects,
     )
-    for index in tqdm(range(num_states), total=num_states, desc="Creating dataset"):
+    total_to_read = int(start_index) + int(num_states)
+    produced = 0
+    for index in tqdm(range(total_to_read), total=total_to_read, desc="Creating dataset"):
         try:
             state = next(iterator)
         except Exception as exc:
@@ -77,6 +80,9 @@ def iter_processed_samples(
             )
             break
 
+        if index < int(start_index):
+            continue
+
         batched_scenario = jax.tree_util.tree_map(lambda x: x[None, ...], state)
         processed = _strip_leading_batch_axis(
             data_process_scenarios(batched_scenario, **preprocess_kwargs)
@@ -84,6 +90,9 @@ def iter_processed_samples(
         if extract_scene:
             processed = {"scenario": state, **processed}
         yield processed
+        produced += 1
+        if produced >= int(num_states):
+            break
 
 
 def resolve_webdataset_output_root(processed_path) -> Path:

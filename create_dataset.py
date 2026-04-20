@@ -137,6 +137,7 @@ def main(cfg) -> None:
             raw_data_url=creation_cfg.raw_data_url,
             waymax_conf_version=creation_cfg.waymax_conf_version,
             num_states=creation_cfg.num_states,
+            start_index=int(getattr(creation_cfg, "start_index", 0)),
             max_num_objects=creation_cfg.max_num_objects,
             extract_scene=creation_cfg.extract_scene,
             preprocess_kwargs=_to_plain_data(creation_cfg.preprocessing),
