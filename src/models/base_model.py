@@ -357,8 +357,13 @@ class BaseDiffusionModel(L.LightningModule):
         noise = jr.normal(key, INPUT_DIM)
         y = mean + std * noise
         err = (model(t, y, batch["agent_past"]) - gt_xy) ** 2
-        weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[..., None, None]
-        loss = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
+        weights = (
+            jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[..., None, None]
+            * jnp.asarray(batch["agent_future_valid"], dtype=err.dtype)
+        )
+        weights = jnp.broadcast_to(weights, err.shape)
+        weighted_element_count = jnp.ones_like(err) * weights
+        loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
         return loss
 
     def on_fit_start(self) -> None:

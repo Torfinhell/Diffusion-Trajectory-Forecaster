@@ -29,15 +29,20 @@ class FdeMetric(BaseMetric):
         self,
         pred_xy: jnp.ndarray,
         gt_xy: jnp.ndarray,
-        agents_coeffs: jnp.ndarray | None,
+        agents_coeffs: jnp.ndarray,
+        future_valid: jnp.ndarray,  # shape: (agents, H, 1)
     ) -> None:
         diff = pred_xy - gt_xy
         dist = jnp.sqrt(jnp.sum(diff**2, axis=-1))
-        dist_last = dist[..., -1]
-        if agents_coeffs is None:
-            weights = jnp.ones(dist_last.shape, dtype=jnp.float32)
-        else:
-            weights = jnp.asarray(agents_coeffs, dtype=jnp.float32)
+        valid = jnp.asarray(future_valid)[..., 0].astype(bool)
+        time_idx = jnp.arange(valid.shape[-1], dtype=jnp.int32)
+        last_valid_idx = jnp.max(jnp.where(valid, time_idx, -1), axis=-1)
+        has_valid = last_valid_idx >= 0
+        last_valid_idx = jnp.maximum(last_valid_idx, 0)
+        weights = jnp.asarray(agents_coeffs, dtype=jnp.float32) * has_valid.astype(
+            jnp.float32
+        )
 
+        dist_last = jnp.take_along_axis(dist, last_valid_idx[..., None], axis=-1).squeeze(-1)
         self.state.sum_error += jnp.sum(dist_last * weights)
         self.state.count += jnp.sum(weights)

@@ -11,7 +11,7 @@ class BaseMetric:
         pass
 
     @abstractmethod
-    def update(self, pred_xy, gt_xy, agents_coeffs):
+    def update(self, pred_xy, gt_xy, agents_coeffs, future_valid):
         pass
 
     @abstractmethod
@@ -30,9 +30,9 @@ class MetricCollection:
         for metric in self.metrics:
             metric.reset()
 
-    def update(self, pred_xy, gt_xy, agents_coeffs):
+    def update(self, pred_xy, gt_xy, agents_coeffs, future_valid):
         for metric in self.metrics:
-            metric.update(pred_xy, gt_xy, agents_coeffs)
+            metric.update(pred_xy, gt_xy, agents_coeffs, future_valid)
 
     def compute(self):
         res = {}

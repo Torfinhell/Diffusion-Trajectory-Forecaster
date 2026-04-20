@@ -16,11 +16,11 @@ def plot_vis_kwargs(model):
 
 
 def to_world_frame(pred_xy, origin_xy):
+    pred_xy = jnp.asarray(pred_xy)
+    origin_xy = jnp.asarray(origin_xy)
+    while origin_xy.ndim < pred_xy.ndim:
+        origin_xy = origin_xy[..., None, :]
     return pred_xy + origin_xy
-
-
-def to_metric_frame(pred_xy, coord_scale):
-    return pred_xy * coord_scale
 
 
 def log_images(model, key, images):
@@ -52,13 +52,6 @@ def mask_pred_for_plot(pred_xy, agents_coeffs):
     return jnp.where(valid_agents, pred_xy, jnp.nan)
 
 
-def batch_coord_scale(batch, sample_idx):
-    coord_scale = batch.get("coord_scale")
-    if coord_scale is None:
-        return jnp.array([1.0], dtype=jnp.float32)
-    return coord_scale[sample_idx]
-
-
 def update_metrics_for_batch(model, metrics, batch, return_first_prediction=False):
     first_pred_xy = None
     num_solutions = int(
@@ -70,8 +63,7 @@ def update_metrics_for_batch(model, metrics, batch, return_first_prediction=Fals
 
     for sample_idx in range(batch["agent_future"].shape[0]):
         gt_xy = batch["agent_future"][sample_idx][..., :2]
-        # Sampling stays in the model's normalized frame; metrics are computed
-        # after restoring the per-scene coordinate scale.
+        future_valid = batch["agent_future_valid"][sample_idx]
         pred_xy = model.sample_multiple_sol(
             batch["agent_past"][sample_idx],
             num_solutions=num_solutions,
@@ -82,16 +74,14 @@ def update_metrics_for_batch(model, metrics, batch, return_first_prediction=Fals
                 else None
             ),
         )
-        coord_scale = batch_coord_scale(batch, sample_idx)
-        pred_xy_metric = to_metric_frame(pred_xy, coord_scale)
-        gt_xy_metric = to_metric_frame(gt_xy, coord_scale)
         metrics.update(
-            pred_xy_metric,
-            gt_xy_metric,
+            pred_xy,
+            gt_xy,
             batch["agents_coeffs"][sample_idx],
+            future_valid,
         )
         if return_first_prediction and sample_idx == 0:
-            first_pred_xy = pred_xy_metric
+            first_pred_xy = pred_xy
 
     return first_pred_xy, None
 

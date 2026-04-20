@@ -7,6 +7,7 @@ def compute_one_step_denoise_ade(model, batch):
     t = jnp.array(min(float(model.t1) * 0.5, 1.0), dtype=jnp.float32)
     key = jr.PRNGKey(0)
     gt_xy = jnp.asarray(batch["agent_future"][sample_idx][..., :2])
+    future_valid = jnp.asarray(batch["agent_future_valid"][sample_idx])
     mean = gt_xy * jnp.exp(-0.5 * model.int_beta(t))
     var = jnp.maximum(1.0 - jnp.exp(-model.int_beta(t)), 1e-5)
     std = jnp.sqrt(var)
@@ -18,7 +19,7 @@ def compute_one_step_denoise_ade(model, batch):
     if pred.ndim + 1 == gt_xy.ndim and gt_xy.shape[0] == 1:
         gt_xy = jnp.squeeze(gt_xy, axis=0)
     ade_metric = model.metrics_train.metrics[0].__class__(name="tmp_ADE")
-    ade_metric.update(pred, gt_xy, agents_coeffs)
+    ade_metric.update(pred, gt_xy, agents_coeffs, future_valid)
     return float(jnp.asarray(ade_metric.compute()))
 
 

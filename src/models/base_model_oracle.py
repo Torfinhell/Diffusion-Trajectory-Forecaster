@@ -62,6 +62,7 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
         gt_xy = batch["agent_future"][sample_idx][..., :2]
         sample_batch = {
             "agent_future": batch["agent_future"][sample_idx],
+            "agent_future_valid": batch["agent_future_valid"][sample_idx],
             "agent_past": batch["agent_past"][sample_idx],
             "agents_coeffs": batch["agents_coeffs"][sample_idx],
         }

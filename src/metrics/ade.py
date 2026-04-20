@@ -29,13 +29,12 @@ class AdeMetric(BaseMetric):
         self,
         pred_xy: jnp.ndarray,  # shape: (agents, H, 2)
         gt_xy: jnp.ndarray,  # shape: (agents, H, 2)
-        agents_coeffs: jnp.ndarray | None,  # shape: (agents,)
+        agents_coeffs: jnp.ndarray,  # shape: (agents,)
+        future_valid: jnp.ndarray,  # shape: (agents, H, 1)
     ) -> None:
         diff = pred_xy - gt_xy
         dist = jnp.sqrt(jnp.sum(diff**2, axis=-1))
-        if agents_coeffs is None:
-            weights = jnp.ones(gt_xy.shape[:-1], dtype=jnp.float32)
-        else:
-            weights = jnp.asarray(agents_coeffs, dtype=jnp.float32)[..., None]
+        weights = jnp.asarray(agents_coeffs, dtype=jnp.float32)[..., None]
+        weights = weights * jnp.asarray(future_valid, dtype=jnp.float32)[..., 0]
         self.state.sum_error += jnp.sum(dist * weights)
         self.state.count += jnp.sum(weights)

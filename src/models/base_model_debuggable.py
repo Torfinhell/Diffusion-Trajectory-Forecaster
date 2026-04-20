@@ -11,14 +11,12 @@ from src.models.base_model_debug import (
     debug_training_shapes,
 )
 from src.models.base_model_eval import (
-    batch_coord_scale,
     log_images,
     mask_pred_for_plot,
     metric_log_name,
     on_test_epoch_end as run_test_epoch_end,
     on_validation_epoch_end as run_validation_epoch_end,
     plot_vis_kwargs,
-    to_metric_frame,
     to_world_frame,
 )
 from src.models.base_model_oracle import (
@@ -132,6 +130,7 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
         # can print per-sample diagnostics before the metric state is updated.
         for sample_idx in range(batch["agent_future"].shape[0]):
             gt_xy = batch["agent_future"][sample_idx][..., :2]
+            future_valid = batch["agent_future_valid"][sample_idx]
             pred_xy = self.sample_multiple_sol(
                 batch["agent_past"][sample_idx],
                 num_solutions=num_solutions,
@@ -142,24 +141,21 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                     else None
                 ),
             )
-
-            coord_scale = batch_coord_scale(batch, sample_idx)
-            pred_xy_metric = to_metric_frame(pred_xy, coord_scale)
-            gt_xy_metric = to_metric_frame(gt_xy, coord_scale)
             agents_coeffs = batch["agents_coeffs"][sample_idx]
 
             if debug_metrics:
                 debug_metric_sample(
-                    sample_idx, pred_xy_metric, gt_xy_metric, agents_coeffs
+                    sample_idx, pred_xy, gt_xy, agents_coeffs
                 )
 
             metrics.update(
-                pred_xy_metric,
-                gt_xy_metric,
+                pred_xy,
+                gt_xy,
                 agents_coeffs,
+                future_valid,
             )
             if return_first_prediction and sample_idx == 0:
-                first_pred_xy = pred_xy_metric
+                first_pred_xy = pred_xy
 
         return first_pred_xy, None
 
