@@ -8,7 +8,7 @@ from pytorch_lightning.profilers import PyTorchProfiler
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.utils import log_run_metadata, process_hparams
+from src.utils import load_best_checkpoint, log_run_metadata, process_hparams
 
 
 class JaxProfilerCallback(Callback):
@@ -68,10 +68,14 @@ class ClearMLFlushCallback(Callback):
         del pl_module
         self._maybe_flush(trainer, force=True)
 
+    def on_test_end(self, trainer, pl_module):
+        del pl_module
+        self._maybe_flush(trainer, force=True)
+
 
 @hydra.main(version_base=None, config_name="ddpm_1", config_path="src/configs")
 def main(cfg) -> None:
-    hparams = process_hparams(cfg, print_hparams=True)
+    hparams = process_hparams(cfg, print_hparams=False)
     logger = instantiate(hparams.logger)
     profiler = None
     if cfg.trainer.enable_profiler:
@@ -110,7 +114,7 @@ def main(cfg) -> None:
         _recursive_=False,
     )
     trainer.fit(diff_model, dm)
-    if diff_model.load_best_checkpoint():
+    if load_best_checkpoint(diff_model):
         trainer.test(diff_model, dm)
     else:
         print("Best checkpoint was not found. Skipping test run.")

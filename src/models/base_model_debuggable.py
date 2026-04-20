@@ -11,6 +11,7 @@ from src.models.base_model_debug import (
     debug_training_shapes,
 )
 from src.models.base_model_eval import (
+    image_log_name,
     log_images,
     mask_pred_for_plot,
     metric_log_name,
@@ -19,6 +20,8 @@ from src.models.base_model_eval import (
     plot_vis_kwargs,
     to_world_frame,
 )
+from src.models.base_model_logging import log_training_step_stats
+from src.models.base_model_stats import batch_target_stats
 from src.models.base_model_oracle import (
     compute_batch_loss as compute_oracle_batch_loss,
     oracle_enabled,
@@ -51,14 +54,25 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
             if self._oracle_enabled("use_for_train_loss"):
                 self.train_key, loss_key = jr.split(self.train_key)
                 value = self.compute_batch_loss(batch, loss_key, use_oracle=True)
+                train_stats = batch_target_stats(batch)
+                grad_norm = None
+                update_norm = None
+                param_norm = None
             else:
-                value, self.model, self.train_key, self.opt_state = (
+                (
+                    value,
+                    train_stats,
+                    grad_norm,
+                    update_norm,
+                    param_norm,
+                    self.model,
+                    self.train_key,
+                    self.opt_state,
+                ) = (
                     BaseDiffusionModel.make_step(
                         self.model,
-                        self.batch_loss_fn,
-                        self.weight,
+                        self.batch_loss_and_stats_fn,
                         self.int_beta,
-                        self.prediction_target,
                         batch,
                         self.t1,
                         self.train_key,
@@ -67,6 +81,13 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                     )
                 )
             self.train_loss_tracker.update("train_loss", jnp.asarray(value))
+            log_training_step_stats(
+                self,
+                grad_norm=grad_norm,
+                update_norm=update_norm,
+                param_norm=param_norm,
+                train_stats=train_stats,
+            )
             self.global_step_ += 1
             if (
                 self._should_run_metrics_this_epoch("train")
@@ -235,7 +256,7 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
         if enable_train_visualization and train_images:
             log_images(
                 self,
-                f"Train scenarios and predictions/epoch_{self.current_epoch}",
+                image_log_name("train", "predictions"),
                 train_images,
             )
         print(

@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 from src.visualization.viz import plot_simulator_state
+from src.utils import maybe_save_best_checkpoint
 
 
 def plot_vis_kwargs(model):
@@ -38,7 +39,11 @@ def log_video(model, key, path):
 
 
 def metric_log_name(split, name):
-    return f"{split}_{name}"
+    return f"{split}/{name}"
+
+
+def image_log_name(split, name):
+    return f"images/{split}_{name}"
 
 
 def mask_pred_for_plot(pred_xy, agents_coeffs):
@@ -141,11 +146,11 @@ def on_train_epoch_end(model):
 
     vals = model.metrics_train.compute()
     log_dict = {metric_log_name("train", k): float(jnp.asarray(v)) for k, v in vals.items()}
-    model.log_dict(log_dict, prog_bar=True)
+    model.log_dict(log_dict, prog_bar=True, on_step=False, on_epoch=True)
     if enable_train_visualization and train_images:
         log_images(
             model,
-            f"Train scenarios and predictions/epoch_{model.current_epoch}",
+            image_log_name("train", "predictions"),
             train_images,
         )
     print(
@@ -176,11 +181,11 @@ def on_validation_epoch_end(model):
             on_epoch=True,
         )
     if not model._should_run_metrics_this_epoch("val"):
-        model._maybe_save_best_checkpoint(checkpoint_metrics)
+        maybe_save_best_checkpoint(model, checkpoint_metrics)
         model._val_batches_for_metrics.clear()
         return
     if len(model.metrics_val) == 0 or len(model._val_batches_for_metrics) == 0:
-        model._maybe_save_best_checkpoint(checkpoint_metrics)
+        maybe_save_best_checkpoint(model, checkpoint_metrics)
         return
 
     enable_visualization = bool(model.vis.get("enable_visualization", False))
@@ -222,15 +227,15 @@ def on_validation_epoch_end(model):
     if enable_visualization and images:
         log_images(
             model,
-            f"Scenarios and predictions/epoch_{model.current_epoch}",
+            image_log_name("val", "predictions"),
             images,
         )
 
     vals = model.metrics_val.compute()
     log_dict = {metric_log_name("val", k): float(jnp.asarray(v)) for k, v in vals.items()}
-    model.log_dict(log_dict, prog_bar=True)
+    model.log_dict(log_dict, prog_bar=True, on_step=False, on_epoch=True)
     checkpoint_metrics.update(log_dict)
-    model._maybe_save_best_checkpoint(checkpoint_metrics)
+    maybe_save_best_checkpoint(model, checkpoint_metrics)
     model._val_batches_for_metrics.clear()
 
 
@@ -240,4 +245,4 @@ def on_test_epoch_end(model):
 
     vals = model.metrics_test.compute()
     log_dict = {metric_log_name("test", k): float(jnp.asarray(v)) for k, v in vals.items()}
-    model.log_dict(log_dict, prog_bar=True)
+    model.log_dict(log_dict, prog_bar=True, on_step=False, on_epoch=True)

@@ -43,9 +43,7 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
     if not use_oracle:
         return model.batch_loss_fn(
             model.model,
-            model.weight,
             model.int_beta,
-            model.prediction_target,
             batch,
             model.t1,
             key,
@@ -67,15 +65,12 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
             "agents_coeffs": batch["agents_coeffs"][sample_idx],
         }
         oracle_model = make_oracle_model(model, gt_xy)
-        losses.append(
-            model.single_loss_fn(
-                oracle_model,
-                model.weight,
-                model.int_beta,
-                model.prediction_target,
-                sample_batch,
-                t[sample_idx],
-                losskey[sample_idx],
-            )
+        loss, _ = model.single_loss_and_stats_fn(
+            oracle_model,
+            model.int_beta,
+            sample_batch,
+            t[sample_idx],
+            losskey[sample_idx],
         )
+        losses.append(loss)
     return jnp.mean(jnp.stack(losses))

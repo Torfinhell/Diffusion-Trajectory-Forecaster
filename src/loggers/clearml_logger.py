@@ -228,17 +228,15 @@ class ClearMLLogger(Logger):
 
     @rank_zero_only
     def finalize(self, status: str) -> None:
+        del status
         task = self._task
         if task is None:
             return
         self.flush_metrics()
-        # ClearML waits up to 300s on shutdown for async repository / requirements
-        # detection. For our runs this metadata is not worth stalling process exit,
-        # especially in offline mode, so kill the background detection thread first.
-        wait_for_repo_detection = getattr(task, "_wait_for_repo_detection", None)
-        if callable(wait_for_repo_detection):
-            wait_for_repo_detection(timeout=-1)
-        task.close()
+        # Lightning may finalize the logger after `fit` and then reuse the same
+        # logger instance for `test`. Closing the ClearML task here marks it as
+        # completed too early and later hyperparameter syncs fail. Keep the task
+        # open for the rest of the process and only flush buffered metrics here.
 
     @staticmethod
     def _split_key(key: str) -> tuple[str, str]:

@@ -25,9 +25,7 @@ def compute_proxy_batch_loss(model, batch, key):
     def loss_at_t(t, loss_key):
         return model.batch_loss_fn_fixed_t(
             model.model,
-            model.weight,
             model.int_beta,
-            model.prediction_target,
             batch,
             t,
             loss_key,

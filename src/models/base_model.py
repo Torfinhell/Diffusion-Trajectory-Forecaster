@@ -17,8 +17,10 @@ from src.models.base_model_eval import (
     on_validation_epoch_end as run_validation_epoch_end,
 )
 from src.models.base_model_eval import update_metrics_for_batch
+from src.models.base_model_logging import log_training_step_stats
 from src.models.base_model_proxy import compute_proxy_batch_loss
-from src.utils import build_checkpoint_run_directory
+from src.models.base_model_stats import masked_abs_mean
+from src.utils import load_best_checkpoint, log_model_artifact
 
 
 class BaseDiffusionModel(L.LightningModule):
@@ -106,12 +108,13 @@ class BaseDiffusionModel(L.LightningModule):
 
     def build_learning_rate(self, base_lr):
         scheduler_cfg = getattr(self, "lr_scheduler_cfg", None)
-        if scheduler_cfg is None:
-            return float(base_lr)
-
-        name = str(scheduler_cfg.get("name", "none")).lower()
-        if name in {"none", "off", "disabled"}:
-            return float(base_lr)
+        if scheduler_cfg is not None:
+            name = str(scheduler_cfg.get("name", "none")).lower()
+        
+        if scheduler_cfg is None or name in {"none", "off", "disabled"}:
+            learning_rate = float(base_lr)
+            self.learning_rate_schedule = learning_rate
+            return learning_rate
 
         decay_steps = int(scheduler_cfg.get("decay_steps", 0))
         if decay_steps <= 0:
@@ -123,18 +126,22 @@ class BaseDiffusionModel(L.LightningModule):
 
         if name == "cosine":
             alpha = end_lr / float(base_lr) if base_lr > 0 else 0.0
-            return optax.cosine_decay_schedule(
+            learning_rate = optax.cosine_decay_schedule(
                 init_value=float(base_lr),
                 decay_steps=decay_steps,
                 alpha=alpha,
             )
+            self.learning_rate_schedule = learning_rate
+            return learning_rate
 
         if name == "linear":
-            return optax.linear_schedule(
+            learning_rate = optax.linear_schedule(
                 init_value=float(base_lr),
                 end_value=end_lr,
                 transition_steps=decay_steps,
             )
+            self.learning_rate_schedule = learning_rate
+            return learning_rate
 
         raise ValueError(f"Unsupported lr scheduler '{name}'")
 
@@ -147,13 +154,20 @@ class BaseDiffusionModel(L.LightningModule):
 
     def training_step(self, batch):
         with jax.profiler.StepTraceAnnotation("train", step_num=int(self.global_step_)):
-            value, self.model, self.train_key, self.opt_state = (
+            (
+                value,
+                train_stats,
+                grad_norm,
+                update_norm,
+                param_norm,
+                self.model,
+                self.train_key,
+                self.opt_state,
+            ) = (
                 BaseDiffusionModel.make_step(
                     self.model,
-                    self.batch_loss_fn,
-                    self.weight,
+                    self.batch_loss_and_stats_fn,
                     self.int_beta,
-                    self.prediction_target,
                     batch,
                     self.t1,
                     self.train_key,
@@ -162,6 +176,13 @@ class BaseDiffusionModel(L.LightningModule):
                 )
             )
             self.train_loss_tracker.update("train_loss", jnp.asarray(value))
+            log_training_step_stats(
+                self,
+                grad_norm=grad_norm,
+                update_norm=update_norm,
+                param_norm=param_norm,
+                train_stats=train_stats,
+            )
             self.global_step_ += 1
             if (
                 self._should_run_metrics_this_epoch("train")
@@ -200,24 +221,33 @@ class BaseDiffusionModel(L.LightningModule):
     @eqx.filter_jit
     def make_step(
         model,
-        batch_loss_fn,
-        weight,
+        batch_loss_and_stats_fn,
         int_beta,
-        prediction_target,
         batch,
         t1,
         key,
         opt_state,
         opt_update,
     ):
-        loss_fn = eqx.filter_value_and_grad(batch_loss_fn)
-        loss, grads = loss_fn(
-            model, weight, int_beta, prediction_target, batch, t1, key
-        )
+        loss_fn = eqx.filter_value_and_grad(batch_loss_and_stats_fn, has_aux=True)
+        (loss, train_stats), grads = loss_fn(model, int_beta, batch, t1, key)
+        grad_norm = optax.global_norm(grads)
         updates, opt_state = opt_update(grads, opt_state)
+        update_norm = optax.global_norm(updates)
         model = eqx.apply_updates(model, updates)
+        param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         key = jr.split(key, 1)[0]
-        return loss, model, key, opt_state
+        return (
+            loss,
+            train_stats,
+            grad_norm,
+            update_norm,
+            param_norm,
+            model,
+            key,
+            opt_state,
+        )
+
 
     def _sampling_t0(self):
         # Override hook for subclasses that need a different sampling start
@@ -238,43 +268,6 @@ class BaseDiffusionModel(L.LightningModule):
         every_n = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
         return (int(self.current_epoch) + 1) % every_n == 0
 
-    def _upload_artifact(self, name, path, metadata=None):
-        logger = getattr(self, "logger", None)
-        if logger is None or not hasattr(logger, "upload_artifact"):
-            return
-        logger.upload_artifact(name=name, path=path, metadata=metadata)
-
-    def _checkpoint_run_dir(self) -> Path:
-        logger = getattr(self, "logger", None)
-        return build_checkpoint_run_directory(self.CHECKPOINT_ROOT, logger)
-
-    def _best_checkpoint_path(self) -> Path:
-        return self._checkpoint_run_dir() / "best.eqx"
-
-    def _maybe_save_best_checkpoint(self, metrics) -> None:
-        metric_value = metrics.get(self.best_checkpoint_metric)
-        if metric_value is None:
-            return
-
-        score = float(jnp.asarray(metric_value))
-        improved = (
-            score < self.best_checkpoint_score
-            if self.best_checkpoint_mode == "min"
-            else score > self.best_checkpoint_score
-        )
-        if not improved:
-            return
-
-        checkpoint_path = self._best_checkpoint_path()
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        eqx.tree_serialise_leaves(checkpoint_path, self.model)
-        self.best_checkpoint_score = score
-        self.best_checkpoint_epoch = int(self.current_epoch)
-        print(
-            f"Saved best checkpoint to {checkpoint_path} "
-            f"({self.best_checkpoint_metric}={score:.6f})"
-        )
-
     @staticmethod
     def _alpha_sigma(int_beta, t):
         alpha = jnp.exp(-0.5 * int_beta(t))
@@ -285,57 +278,44 @@ class BaseDiffusionModel(L.LightningModule):
         # debug class overrides it
         return self.batch_loss_fn(
             self.model,
-            self.weight,
             self.int_beta,
-            self.prediction_target,
             batch,
             self.t1,
             key,
         )
 
     @staticmethod
-    def batch_loss_fn(model, weight, int_beta, prediction_target, batch, t1, key):
-
+    def batch_loss_and_stats_fn(model, int_beta, batch, t1, key):
         batch_size = batch["agent_future"].shape[0]
         tkey, losskey = jr.split(key)
         losskey = jr.split(losskey, batch_size)
-        """
-		Low-discrepancy sampling over t to reduce variance
-		by sampling very evenly by sampling uniformly and independently from (t1-t0)/batch_size bins
-		t = [U(0,1), U(1,2), U(2,3), ...]
-		"""
         t_min = min(0.1, float(t1) * 0.5)
         t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t1)
-        """ Fixing the first three arguments of single_loss_fn, leaving batch, t and key as input """
-        loss_fn = partial(
-            BaseDiffusionModel.single_loss_fn,
-            model,
-            weight,
-            int_beta,
-            prediction_target,
-        )
+        loss_fn = partial(BaseDiffusionModel.single_loss_and_stats_fn, model, int_beta)
         loss_fn = jax.vmap(loss_fn)
-        return jnp.mean(loss_fn(batch, t, losskey))
+        losses, stats = loss_fn(batch, t, losskey)
+        mean_stats = {name: jnp.mean(value) for name, value in stats.items()}
+        return jnp.mean(losses), mean_stats
+
+    @staticmethod
+    def batch_loss_fn(model, int_beta, batch, t1, key):
+        loss, _ = BaseDiffusionModel.batch_loss_and_stats_fn(model, int_beta, batch, t1, key)
+        return loss
 
     @staticmethod
     def batch_loss_fn_fixed_t(
-        model, weight, int_beta, prediction_target, batch, t, key
+        model, int_beta, batch, t, key
     ):
         batch_size = batch["agent_future"].shape[0]
         losskey = jr.split(key, batch_size)
         t = jnp.full((batch_size,), t, dtype=jnp.float32)
-        loss_fn = partial(
-            BaseDiffusionModel.single_loss_fn,
-            model,
-            weight,
-            int_beta,
-            prediction_target,
-        )
+        loss_fn = partial(BaseDiffusionModel.single_loss_and_stats_fn, model, int_beta)
         loss_fn = jax.vmap(loss_fn)
-        return jnp.mean(loss_fn(batch, t, losskey))
+        losses, _ = loss_fn(batch, t, losskey)
+        return jnp.mean(losses)
 
     @staticmethod
-    def single_loss_fn(model, weight, int_beta, prediction_target, batch, t, key):
+    def single_loss_and_stats_fn(model, int_beta, batch, t, key):
         """
         OU process provides analytical mean and variance
         int_beta(t) = ß = θ
@@ -356,7 +336,8 @@ class BaseDiffusionModel(L.LightningModule):
         std = jnp.sqrt(var)
         noise = jr.normal(key, INPUT_DIM)
         y = mean + std * noise
-        err = (model(t, y, batch["agent_past"]) - gt_xy) ** 2
+        pred_xy = model(t, y, batch["agent_past"])
+        err = (pred_xy - gt_xy) ** 2
         weights = (
             jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[..., None, None]
             * jnp.asarray(batch["agent_future_valid"], dtype=err.dtype)
@@ -364,19 +345,24 @@ class BaseDiffusionModel(L.LightningModule):
         weights = jnp.broadcast_to(weights, err.shape)
         weighted_element_count = jnp.ones_like(err) * weights
         loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
-        return loss
+        valid_weights = jnp.asarray(batch["agent_future_valid"], dtype=gt_xy.dtype)
+        stats = {
+            "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
+            "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
+            "valid_ratio": jnp.mean(valid_weights),
+        }
+        return loss, stats
 
     def on_fit_start(self) -> None:
         self.CHECKPOINT_ROOT.mkdir(exist_ok=True)
-        print(self.hparams)
         if self.load_best_checkpoint_flag:
             try:
-                self.load_best_checkpoint()
+                load_best_checkpoint(self)
             except:
                 print("Didnt load weights")
 
     def on_fit_end(self):
-        self._log_model_artifact()
+        log_model_artifact(self)
 
     def on_train_epoch_start(self) -> None:
         self.train_loss_tracker.reset()
@@ -395,40 +381,6 @@ class BaseDiffusionModel(L.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         return run_test_epoch_end(self)
-
-    def _log_model_artifact(self) -> None:
-        logger = getattr(self, "logger", None)
-        if logger is None:
-            return
-        checkpoint_path = self._best_checkpoint_path()
-        if not checkpoint_path.exists():
-            return
-
-        artifact_name = f"{getattr(logger, 'name', 'model')}-best-model"
-        version = getattr(logger, "version", None)
-        if version:
-            artifact_name = f"{artifact_name}-{version}"
-
-        self._upload_artifact(
-            name=artifact_name,
-            path=checkpoint_path,
-            metadata={
-                "epoch": self.best_checkpoint_epoch,
-                "global_step": int(self.global_step_),
-                "monitor_metric": self.best_checkpoint_metric,
-                "monitor_mode": self.best_checkpoint_mode,
-                "monitor_score": self.best_checkpoint_score,
-            },
-        )
-
-    def load_best_checkpoint(self) -> bool:
-        checkpoint_path = self._best_checkpoint_path()
-        if not checkpoint_path.exists():
-            return False
-        self.model = eqx.tree_deserialise_leaves(checkpoint_path, self.model)
-        print(f"Loaded best checkpoint from {checkpoint_path}")
-        return True
-
 
     def _update_metrics_for_batch(self, metrics, batch, return_first_prediction=False):
         # debug subclass overrides it
