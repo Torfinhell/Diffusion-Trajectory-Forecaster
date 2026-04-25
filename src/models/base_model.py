@@ -29,6 +29,10 @@ class BaseDiffusionModel(L.LightningModule):
         load_best_checkpoint,
         cfg_metrics,
         vis_cfg,
+        model,
+        loss,
+        optimizer,
+        scheduler=None,
         grad_clip=None,
         trainer_cfg=None,
         prediction_target="x0",
@@ -81,64 +85,20 @@ class BaseDiffusionModel(L.LightningModule):
             float("inf") if self.best_checkpoint_mode == "min" else float("-inf")
         )
         self.best_checkpoint_epoch = None
-        self.model = self.get_model(key_model)
+        self.model = instantiate(model, key=key_model)
+        self.loss_fn = instantiate(loss)
+        self.learning_rate_schedule = (
+            instantiate(scheduler) if scheduler is not None else None
+        )
+        optimizer_args = {}
+        if self.learning_rate_schedule is not None:
+            optimizer_args["learning_rate"] = self.learning_rate_schedule
+        optimizer_transform = instantiate(optimizer, **optimizer_args)
+        self.optim = self.clip_optimizer(optimizer_transform)
+        self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
+        self.loss_fn = self.loss_fn
         self.configure_ddpm_scheduler()
-        self.configure_optimizers()
         self.data_shape = None
-
-    def get_model(self, cfg_model, key_model):
-        raise NotImplementedError(
-            "Should not use base class. Should implement get_model for child class"
-        )
-
-    def configure_ddpm_scheduler(self):
-        raise NotImplementedError(
-            "Should not use base class. Should implement configure_ddpm_scheduler for child class"
-        )
-
-    def configure_optimizers(self):
-        raise NotImplementedError(
-            "Should not use base class. Should implement configure_optimizers for child class"
-        )
-
-    def build_learning_rate(self, base_lr):
-        scheduler_cfg = getattr(self, "lr_scheduler_cfg", None)
-        if scheduler_cfg is not None:
-            name = str(scheduler_cfg.get("name", "none")).lower()
-
-        if scheduler_cfg is None or name in {"none", "off", "disabled"}:
-            learning_rate = float(base_lr)
-            self.learning_rate_schedule = learning_rate
-            return learning_rate
-
-        decay_steps = int(scheduler_cfg.get("decay_steps", 0))
-        if decay_steps <= 0:
-            raise ValueError(
-                f"lr_scheduler.decay_steps must be > 0 for scheduler '{name}'"
-            )
-
-        end_lr = float(scheduler_cfg.get("end_lr", 0.0))
-
-        if name == "cosine":
-            alpha = end_lr / float(base_lr) if base_lr > 0 else 0.0
-            learning_rate = optax.cosine_decay_schedule(
-                init_value=float(base_lr),
-                decay_steps=decay_steps,
-                alpha=alpha,
-            )
-            self.learning_rate_schedule = learning_rate
-            return learning_rate
-
-        if name == "linear":
-            learning_rate = optax.linear_schedule(
-                init_value=float(base_lr),
-                end_value=end_lr,
-                transition_steps=decay_steps,
-            )
-            self.learning_rate_schedule = learning_rate
-            return learning_rate
-
-        raise ValueError(f"Unsupported lr scheduler '{name}'")
 
     def clip_optimizer(self, optimizer):
         transforms = []
@@ -160,7 +120,7 @@ class BaseDiffusionModel(L.LightningModule):
                 self.opt_state,
             ) = BaseDiffusionModel.make_step(
                 self.model,
-                self.batch_loss,
+                self.loss_fn,
                 self.int_beta,
                 batch,
                 self.t1,
@@ -286,9 +246,6 @@ class BaseDiffusionModel(L.LightningModule):
         self, model, int_beta, data_shape, dt0, t1, context, save_full=False, key=None
     ):
         raise NotImplementedError("Should implement Sample one sol in derived class")
-
-    def single_loss(model, int_beta, batch, t, key):
-        raise NotADirectoryError("Should Implement loss in derived class")
 
     def _should_run_metrics_this_epoch(self, split):
         every_n = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))

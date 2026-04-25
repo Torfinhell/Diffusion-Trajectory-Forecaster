@@ -4,7 +4,6 @@ import equinox as eqx
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jr
-import optax
 
 from .base_model import BaseDiffusionModel
 from .base_model_debug import DebuggableBaseDiffusionModel
@@ -41,29 +40,12 @@ class _DiffusionLinearBase:
         hid_dim,
         input_shape: list[int],
         output_shape: list[int],
-        lr=2e-3,
-        lr_scheduler=None,
         **kwargs,
     ):
         self.hid_dim = hid_dim
         self.input_shape = input_shape
         self.output_shape = output_shape
-        self.lr = lr
-        self.lr_scheduler_cfg = lr_scheduler or {"name": "none"}
         super().__init__(**kwargs)
-
-    def get_model(self, key_model):
-        return DiffDenoiser(
-            hid_dim=self.hid_dim,
-            input_shape=self.input_shape,
-            output_shape=self.output_shape,
-            key=key_model,
-        )
-
-    def configure_optimizers(self):
-        optimizer = optax.adam(self.build_learning_rate(self.lr))
-        self.optim = self.clip_optimizer(optimizer)
-        self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
 
     def configure_ddpm_scheduler(self):
         self.int_beta = lambda t: t

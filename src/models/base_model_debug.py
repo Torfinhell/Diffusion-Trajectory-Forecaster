@@ -60,7 +60,7 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                     self.opt_state,
                 ) = BaseDiffusionModel.make_step(
                     self.model,
-                    self.batch_loss,
+                    self.loss_fn,
                     self.int_beta,
                     batch,
                     self.t1,

@@ -39,6 +39,7 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
     if not use_oracle:
         return model.batch_loss_fn(
             model.model,
+            model.loss_fn,
             model.int_beta,
             batch,
             model.t1,
@@ -61,7 +62,7 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
             "agents_coeffs": batch["agents_coeffs"][sample_idx],
         }
         oracle_model = make_oracle_model(model, gt_xy)
-        loss, _ = model.single_loss(
+        loss, _ = model.loss_fn(
             oracle_model,
             model.int_beta,
             sample_batch,

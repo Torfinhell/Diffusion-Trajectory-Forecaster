@@ -4,27 +4,6 @@ import jax
 from pytorch_lightning.callbacks import Callback
 
 
-class ClearMLFlushCallback(Callback):
-    def _maybe_flush(self, trainer, force: bool = False):
-        logger = getattr(trainer, "logger", None)
-        if logger is None or not hasattr(logger, "maybe_flush_metrics"):
-            return
-        epoch = int(getattr(trainer, "current_epoch", 0)) + 1
-        logger.maybe_flush_metrics(epoch=epoch, force=force)
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        del pl_module
-        self._maybe_flush(trainer)
-
-    def on_fit_end(self, trainer, pl_module):
-        del pl_module
-        self._maybe_flush(trainer, force=True)
-
-    def on_test_end(self, trainer, pl_module):
-        del pl_module
-        self._maybe_flush(trainer, force=True)
-
-
 class JaxProfilerCallback(Callback):
     def __init__(self, log_dir: str, start_step: int, num_steps: int):
         super().__init__()

@@ -6,11 +6,6 @@ grad_clip: ${trainer.gradient_clip_val}
 vis_cfg: ${visual}
 trainer_cfg: ${trainer}
 prediction_target: x0
-lr: 1e-3
-lr_scheduler:
-  name: cosine
-  decay_steps: 230
-  end_lr: 7e-4
 num_agents: 32
 time_len: 11
 num_feat: 9
@@ -47,3 +42,21 @@ num_camlp: 2
 output_shape: [32, 80, 2]
 fourier_num_freqs: 80
 final_out_dim: 160
+model:
+  _target_: src.models.diff_attn.DiffAttention
+  se_args: ${model.se_args}
+  samlp_args: ${model.samlp_args}
+  num_sa_mlp: ${model.num_sa_mlp}
+  camlp_args: ${model.camlp_args}
+  num_camlp: ${model.num_camlp}
+  out_shape: ${model.output_shape}
+  final_out_dim: ${model.final_out_dim}
+loss:
+  _target_: src.losses.MSELoss
+optimizer:
+  _target_: optax.adam
+scheduler:
+  _target_: optax.cosine_decay_schedule
+  init_value: 1e-3
+  decay_steps: 230
+  alpha: 0.7

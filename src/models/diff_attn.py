@@ -6,10 +6,7 @@ import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jr
-import optax
 from einops import rearrange, repeat
-
-from utils.stats import masked_abs_mean
 
 from .base_model import BaseDiffusionModel
 from .base_model_debug import DebuggableBaseDiffusionModel
@@ -289,126 +286,45 @@ class DiffAttention(eqx.Module):
 class _DiffusionAttentionBase:
     def __init__(
         self,
-        se_args,
-        samlp_args,
-        num_sa_mlp,
-        camlp_args,
-        num_camlp,
-        final_out_dim,
-        output_shape: list[int],
-        lr=4e-4,
-        lr_scheduler=None,
         **kwargs,
     ):
-        self.se_args = se_args
-        self.samlp_args = samlp_args
-        self.num_sa_mlp = num_sa_mlp
-        self.camlp_args = camlp_args
-        self.num_camlp = num_camlp
-        self.output_shape = output_shape
-        self.final_out_dim = final_out_dim
-        self.lr = lr
-        self.lr_scheduler_cfg = lr_scheduler or {"name": "none"}
         super().__init__(**kwargs)
-
-    def get_model(self, key_model):
-        return DiffAttention(
-            se_args=self.se_args,
-            samlp_args=self.samlp_args,
-            num_sa_mlp=self.num_sa_mlp,
-            camlp_args=self.camlp_args,
-            num_camlp=self.num_camlp,
-            out_shape=self.output_shape,
-            final_out_dim=self.final_out_dim,
-            key=key_model,
-        )
-
-    def configure_optimizers(self):
-        optimizer = optax.adam(self.build_learning_rate(self.lr))
-        self.optim = self.clip_optimizer(optimizer)
-        self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
-
-    def configure_ddpm_scheduler(self):
-        self.int_beta = lambda t: t
-        self.weight = lambda t: 1 - jnp.exp(-self.int_beta(t))
-        self.t0 = 1e-3
-        self.t1 = 2.0
-        self.dt0 = 0.01
-
-    def single_loss(self, batch, t, key):
-        """
-        OU process provides analytical mean and variance
-        int_beta(t) = ß = θ
-        E[X_t] = μ + exp[-θ t] ( X_0 - μ) w/ μ=0 gives =X_0 * exp[ - θ t ]
-        V[X_t] = σ^2/(2θ) ( 1 - exp(-2 θ t) ) w/ σ^2=ß=θ gives = 1 - exp(-2 ß t)
-        :param model:
-        :param weight:
-        :param int_beta:
-        :param batch:
-        :param t:
-        :param key:
-        :return:
-        """
-        gt_xy = batch["agent_future"][..., :2]
-        INPUT_DIM = gt_xy.shape
-        mean = gt_xy * jnp.exp(-0.5 * self.int_beta(t))
-        var = jnp.maximum(1.0 - jnp.exp(-self.int_beta(t)), 1e-5)
-        std = jnp.sqrt(var)
-        noise = jr.normal(key, INPUT_DIM)
-        y = mean + std * noise
-        pred_xy = self.model(t, y, batch["agent_past"])
-        err = (pred_xy - gt_xy) ** 2
-        weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[
-            ..., None, None
-        ] * jnp.asarray(batch["agent_future_valid"], dtype=err.dtype)
-        weights = jnp.broadcast_to(weights, err.shape)
-        weighted_element_count = jnp.ones_like(err) * weights
-        loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
-        valid_weights = jnp.asarray(batch["agent_future_valid"], dtype=gt_xy.dtype)
-        stats = {
-            "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
-            "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
-            "valid_ratio": jnp.mean(valid_weights),
-        }
-        return loss, stats
 
     @eqx.filter_jit
     def sample_one_sol(
         self,
         data_shape,
-        dt0,
-        t1,
         context,
+        num_steps=50,
         save_full=False,
         key=None,
     ):
-        """
-        Return full reverse trajectory states sampled at `num_solutions` times.
-        Output shape: [num_solutions, data_shape]
-        """
         if key is None:
             self.sample_key, key = jr.split(self.sample_key)
 
         y1 = jr.normal(key, data_shape)
-        num_steps = max(1, int(jnp.ceil((t1 - self.t0) / abs(dt0))))
-        ts = jnp.linspace(t1, self.t0, num_steps + 1)
-        x = y1
-        path = []
-        for step_idx in range(num_steps):
-            t_cur = ts[step_idx]
-            t_next = ts[step_idx + 1]
+        ts = jnp.linspace(1e-3, 2.0, num_steps + 1)
+
+        def scan_fn(x, t_pair):
+            t_cur, t_next = t_pair
+
             alpha_cur, sigma_cur = self._alpha_sigma(self.int_beta, t_cur)
             alpha_next, sigma_next = self._alpha_sigma(self.int_beta, t_next)
+
             pred = self.model(t_cur, x, context)
             eps_pred = (x - alpha_cur * pred) / jnp.maximum(sigma_cur, 1e-5)
-            x = alpha_next * pred + sigma_next * eps_pred
-            if save_full:
-                path.append(x)
-        if save_full:
-            return jnp.stack(path, axis=0)
-        return x[None, ...]
+            x_next = alpha_next * pred + sigma_next * eps_pred
+            return x_next, x_next
 
-    def _alpha_sigma(int_beta, t):
-        alpha = jnp.exp(-0.5 * int_beta(t))
-        sigma = jnp.sqrt(jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5))
+        t_pairs = (ts[:-1], ts[1:])
+
+        final_x, path = jax.lax.scan(scan_fn, y1, t_pairs)
+
+        if save_full:
+            return path
+        return final_x[None, ...]
+
+    def _alpha_sigma(t):
+        alpha = jnp.exp(-0.5 * t)
+        sigma = jnp.sqrt(jnp.maximum(1.0 - jnp.exp(-t), 1e-5))
         return alpha, sigma
