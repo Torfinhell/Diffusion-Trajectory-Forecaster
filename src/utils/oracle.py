@@ -1,10 +1,6 @@
 import jax.numpy as jnp
 import jax.random as jr
-
-try:
-    from mocked_model import OracleDiffusionModel
-except ImportError:
-    OracleDiffusionModel = None
+from mocked_model import OracleDiffusionModel
 
 
 def oracle_enabled(model, key):
@@ -65,7 +61,7 @@ def compute_batch_loss(model, batch, key, use_oracle=False):
             "agents_coeffs": batch["agents_coeffs"][sample_idx],
         }
         oracle_model = make_oracle_model(model, gt_xy)
-        loss, _ = model.single_loss_and_stats_fn(
+        loss, _ = model.single_loss(
             oracle_model,
             model.int_beta,
             sample_batch,

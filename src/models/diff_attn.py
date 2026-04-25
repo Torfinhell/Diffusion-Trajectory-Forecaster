@@ -324,7 +324,8 @@ class _DiffusionAttentionBase:
         )
 
     def configure_optimizers(self):
-        self.optim = self.build_optimizer(self.build_learning_rate(self.lr))
+        optimizer = optax.adam(self.build_learning_rate(self.lr))
+        self.optim = self.clip_optimizer(optimizer)
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
 
     def configure_ddpm_scheduler(self):
@@ -334,7 +335,7 @@ class _DiffusionAttentionBase:
         self.t1 = 2.0
         self.dt0 = 0.01
 
-    def single_loss_and_stats_fn(model, int_beta, batch, t, key):
+    def single_loss(self, batch, t, key):
         """
         OU process provides analytical mean and variance
         int_beta(t) = ß = θ
@@ -350,12 +351,12 @@ class _DiffusionAttentionBase:
         """
         gt_xy = batch["agent_future"][..., :2]
         INPUT_DIM = gt_xy.shape
-        mean = gt_xy * jnp.exp(-0.5 * int_beta(t))
-        var = jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5)
+        mean = gt_xy * jnp.exp(-0.5 * self.int_beta(t))
+        var = jnp.maximum(1.0 - jnp.exp(-self.int_beta(t)), 1e-5)
         std = jnp.sqrt(var)
         noise = jr.normal(key, INPUT_DIM)
         y = mean + std * noise
-        pred_xy = model(t, y, batch["agent_past"])
+        pred_xy = self.model(t, y, batch["agent_past"])
         err = (pred_xy - gt_xy) ** 2
         weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[
             ..., None, None
@@ -371,12 +372,43 @@ class _DiffusionAttentionBase:
         }
         return loss, stats
 
+    @eqx.filter_jit
+    def sample_one_sol(
+        self,
+        data_shape,
+        dt0,
+        t1,
+        context,
+        save_full=False,
+        key=None,
+    ):
+        """
+        Return full reverse trajectory states sampled at `num_solutions` times.
+        Output shape: [num_solutions, data_shape]
+        """
+        if key is None:
+            self.sample_key, key = jr.split(self.sample_key)
 
-class DiffusionAttentionModel(_DiffusionAttentionBase, BaseDiffusionModel):
-    pass
+        y1 = jr.normal(key, data_shape)
+        num_steps = max(1, int(jnp.ceil((t1 - self.t0) / abs(dt0))))
+        ts = jnp.linspace(t1, self.t0, num_steps + 1)
+        x = y1
+        path = []
+        for step_idx in range(num_steps):
+            t_cur = ts[step_idx]
+            t_next = ts[step_idx + 1]
+            alpha_cur, sigma_cur = self._alpha_sigma(self.int_beta, t_cur)
+            alpha_next, sigma_next = self._alpha_sigma(self.int_beta, t_next)
+            pred = self.model(t_cur, x, context)
+            eps_pred = (x - alpha_cur * pred) / jnp.maximum(sigma_cur, 1e-5)
+            x = alpha_next * pred + sigma_next * eps_pred
+            if save_full:
+                path.append(x)
+        if save_full:
+            return jnp.stack(path, axis=0)
+        return x[None, ...]
 
-
-class DiffusionAttentionDebugModel(
-    _DiffusionAttentionBase, DebuggableBaseDiffusionModel
-):
-    pass
+    def _alpha_sigma(int_beta, t):
+        alpha = jnp.exp(-0.5 * int_beta(t))
+        sigma = jnp.sqrt(jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5))
+        return alpha, sigma

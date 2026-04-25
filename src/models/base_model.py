@@ -140,11 +140,11 @@ class BaseDiffusionModel(L.LightningModule):
 
         raise ValueError(f"Unsupported lr scheduler '{name}'")
 
-    def build_optimizer(self, learning_rate):
+    def clip_optimizer(self, optimizer):
         transforms = []
         if self.grad_clip is not None:
             transforms.append(optax.clip_by_global_norm(self.grad_clip))
-        transforms.append(optax.adam(learning_rate))
+        transforms.append(optimizer)
         return optax.chain(*transforms)
 
     def training_step(self, batch):
@@ -160,7 +160,7 @@ class BaseDiffusionModel(L.LightningModule):
                 self.opt_state,
             ) = BaseDiffusionModel.make_step(
                 self.model,
-                self.batch_loss_and_stats_fn,
+                self.batch_loss,
                 self.int_beta,
                 batch,
                 self.t1,
@@ -214,7 +214,7 @@ class BaseDiffusionModel(L.LightningModule):
     @eqx.filter_jit
     def make_step(
         model,
-        batch_loss_and_stats_fn,
+        batch_loss,
         int_beta,
         batch,
         t1,
@@ -222,7 +222,7 @@ class BaseDiffusionModel(L.LightningModule):
         opt_state,
         opt_update,
     ):
-        loss_fn = eqx.filter_value_and_grad(batch_loss_and_stats_fn, has_aux=True)
+        loss_fn = eqx.filter_value_and_grad(batch_loss, has_aux=True)
         (loss, train_stats), grads = loss_fn(model, int_beta, batch, t1, key)
         grad_norm = optax.global_norm(grads)
         updates, opt_state = opt_update(grads, opt_state)
@@ -241,90 +241,18 @@ class BaseDiffusionModel(L.LightningModule):
             opt_state,
         )
 
-    def _sampling_t0(self):
-        # Override hook for subclasses that need a different sampling start
-        if hasattr(self, "t0"):
-            return float(self.t0)
-        return 1e-3
-
-    def _should_run_metrics_this_epoch(self, split):
-        every_n = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
-        return (int(self.current_epoch) + 1) % every_n == 0
-
     @staticmethod
-    def _alpha_sigma(int_beta, t):
-        alpha = jnp.exp(-0.5 * int_beta(t))
-        sigma = jnp.sqrt(jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5))
-        return alpha, sigma
-
-    def compute_batch_loss(self, batch, key):
+    def batch_loss_fn(model, loss_fn, int_beta, batch, t, key):
         # debug class overrides it
-        return self.batch_loss_fn(
-            self.model,
-            self.int_beta,
-            batch,
-            self.t1,
-            key,
-        )
-
-    def batch_loss_and_stats_fn(self, model, int_beta, batch, t1, key):
         batch_size = batch["agent_future"].shape[0]
         tkey, losskey = jr.split(key)
         losskey = jr.split(losskey, batch_size)
-        t_min = min(0.1, float(t1) * 0.5)
-        t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t1)
-        loss_fn = partial(self.single_loss_and_stats_fn, model, int_beta)
+        t_min = min(0.1, float(t) * 0.5)
+        t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t)
+        loss_fn = partial(loss_fn, model, int_beta)
         loss_fn = jax.vmap(loss_fn)
         losses = loss_fn(batch, t, losskey)
         return jnp.mean(losses)
-
-    def batch_loss_fn(model, int_beta, batch, t1, key):
-        loss = BaseDiffusionModel.batch_loss_and_stats_fn(
-            model, int_beta, batch, t1, key
-        )
-        return loss
-
-    def batch_loss_fn_fixed_t(self, model, int_beta, batch, t, key):
-        batch_size = batch["agent_future"].shape[0]
-        losskey = jr.split(key, batch_size)
-        t = jnp.full((batch_size,), t, dtype=jnp.float32)
-        loss_fn = partial(self.single_loss_and_stats_fn, model, int_beta)
-        loss_fn = jax.vmap(loss_fn)
-        losses, _ = loss_fn(batch, t, losskey)
-        return jnp.mean(losses)
-
-    def single_loss_and_stats_fn(model, int_beta, batch, t, key):
-        raise NotADirectoryError("Should Implement loss in derived class")
-
-    def on_fit_end(self):
-        log_model_artifact(self)
-
-    def on_train_epoch_start(self) -> None:
-        self.train_loss_tracker.reset()
-
-    def on_train_epoch_end(self) -> None:
-        return run_train_epoch_end(self)
-
-    def on_validation_epoch_start(self) -> None:
-        self.val_loss_tracker.reset()
-
-    def on_validation_epoch_end(self) -> None:
-        return run_validation_epoch_end(self)
-
-    def on_test_epoch_start(self) -> None:
-        self.metrics_test.reset()
-
-    def on_test_epoch_end(self) -> None:
-        return run_test_epoch_end(self)
-
-    def _update_metrics_for_batch(self, metrics, batch, return_first_prediction=False):
-        # debug subclass overrides it
-        return update_metrics_for_batch(
-            self,
-            metrics,
-            batch,
-            return_first_prediction=return_first_prediction,
-        )
 
     def sample_multiple_sol(
         self,
@@ -355,39 +283,37 @@ class BaseDiffusionModel(L.LightningModule):
 
     @eqx.filter_jit
     def sample_one_sol(
-        self,
-        model,
-        int_beta,
-        data_shape,
-        dt0,
-        t1,
-        context,
-        save_full=False,
-        key=None,
+        self, model, int_beta, data_shape, dt0, t1, context, save_full=False, key=None
     ):
-        """
-        Return full reverse trajectory states sampled at `num_solutions` times.
-        Output shape: [num_solutions, data_shape]
-        """
-        if key is None:
-            self.sample_key, key = jr.split(self.sample_key)
+        raise NotImplementedError("Should implement Sample one sol in derived class")
 
-        t0 = self._sampling_t0()
-        y1 = jr.normal(key, data_shape)
-        num_steps = max(1, int(np.ceil((t1 - t0) / abs(dt0))))
-        ts = jnp.linspace(t1, t0, num_steps + 1)
-        x = y1
-        path = []
-        for step_idx in range(num_steps):
-            t_cur = ts[step_idx]
-            t_next = ts[step_idx + 1]
-            alpha_cur, sigma_cur = self._alpha_sigma(int_beta, t_cur)
-            alpha_next, sigma_next = self._alpha_sigma(int_beta, t_next)
-            pred = model(t_cur, x, context)
-            eps_pred = (x - alpha_cur * pred) / jnp.maximum(sigma_cur, 1e-5)
-            x = alpha_next * pred + sigma_next * eps_pred
-            if save_full:
-                path.append(x)
-        if save_full:
-            return jnp.stack(path, axis=0)
-        return x[None, ...]
+    def single_loss(model, int_beta, batch, t, key):
+        raise NotADirectoryError("Should Implement loss in derived class")
+
+    def _should_run_metrics_this_epoch(self, split):
+        every_n = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
+        return (int(self.current_epoch) + 1) % every_n == 0
+
+    def on_fit_end(self):
+        log_model_artifact(self)
+
+    def on_train_epoch_end(self) -> None:
+        return run_train_epoch_end(self)
+
+    def on_validation_epoch_start(self) -> None:
+        self.val_loss_tracker.reset()
+
+    def on_validation_epoch_end(self) -> None:
+        return run_validation_epoch_end(self)
+
+    def on_test_epoch_end(self) -> None:
+        return run_test_epoch_end(self)
+
+    def _update_metrics_for_batch(self, metrics, batch, return_first_prediction=False):
+        # debug subclass overrides it
+        return update_metrics_for_batch(
+            self,
+            metrics,
+            batch,
+            return_first_prediction=return_first_prediction,
+        )
