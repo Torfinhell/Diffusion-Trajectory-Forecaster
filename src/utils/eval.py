@@ -1,6 +1,7 @@
 import jax.numpy as jnp
-from src.visualization.viz import plot_simulator_state
+
 from src.utils import maybe_save_best_checkpoint
+from src.visualization.viz import plot_simulator_state
 
 
 def plot_vis_kwargs(model):
@@ -73,11 +74,7 @@ def update_metrics_for_batch(model, metrics, batch, return_first_prediction=Fals
             batch["agent_past"][sample_idx],
             num_solutions=num_solutions,
             predict_shape=gt_xy.shape,
-            oracle_gt_xy=(
-                gt_xy
-                if model._oracle_enabled("use_for_sampling")
-                else None
-            ),
+            oracle_gt_xy=(gt_xy if model._oracle_enabled("use_for_sampling") else None),
         )
         metrics.update(
             pred_xy,
@@ -107,7 +104,9 @@ def on_train_epoch_end(model):
     if len(model.metrics_train) == 0 or len(model._train_batches_for_metrics) == 0:
         return
 
-    enable_train_visualization = bool(model.vis.get("enable_train_visualization", False))
+    enable_train_visualization = bool(
+        model.vis.get("enable_train_visualization", False)
+    )
     train_images = []
     plot_kwargs = plot_vis_kwargs(model)
 
@@ -145,7 +144,9 @@ def on_train_epoch_end(model):
                 )
 
     vals = model.metrics_train.compute()
-    log_dict = {metric_log_name("train", k): float(jnp.asarray(v)) for k, v in vals.items()}
+    log_dict = {
+        metric_log_name("train", k): float(jnp.asarray(v)) for k, v in vals.items()
+    }
     model.log_dict(log_dict, prog_bar=True, on_step=False, on_epoch=True)
     if enable_train_visualization and train_images:
         log_images(
@@ -172,7 +173,10 @@ def on_validation_epoch_end(model):
             on_epoch=True,
         )
     checkpoint_metrics.update(val_losses)
-    if bool(model.proxy_val_cfg.get("enabled", False)) and "val_proxy_loss" in val_losses:
+    if (
+        bool(model.proxy_val_cfg.get("enabled", False))
+        and "val_proxy_loss" in val_losses
+    ):
         model.log(
             metric_log_name("val", "proxy_loss"),
             val_losses["val_proxy_loss"],
@@ -232,7 +236,9 @@ def on_validation_epoch_end(model):
         )
 
     vals = model.metrics_val.compute()
-    log_dict = {metric_log_name("val", k): float(jnp.asarray(v)) for k, v in vals.items()}
+    log_dict = {
+        metric_log_name("val", k): float(jnp.asarray(v)) for k, v in vals.items()
+    }
     model.log_dict(log_dict, prog_bar=True, on_step=False, on_epoch=True)
     checkpoint_metrics.update(log_dict)
     maybe_save_best_checkpoint(model, checkpoint_metrics)
@@ -244,5 +250,7 @@ def on_test_epoch_end(model):
         return
 
     vals = model.metrics_test.compute()
-    log_dict = {metric_log_name("test", k): float(jnp.asarray(v)) for k, v in vals.items()}
+    log_dict = {
+        metric_log_name("test", k): float(jnp.asarray(v)) for k, v in vals.items()
+    }
     model.log_dict(log_dict, prog_bar=True, on_step=False, on_epoch=True)

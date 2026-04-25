@@ -6,12 +6,6 @@ grad_clip: ${trainer.gradient_clip_val}
 vis_cfg: ${visual}
 trainer_cfg: ${trainer}
 prediction_target: x0
-oracle_cfg:
-  use_for_train_loss: false
-  use_for_val_loss: false
-  use_for_sampling: false
-  sampling_mode: exact
-  sampling_t0: 0.001
 hid_dim: 256
 input_shape: [32, 11, 9]
 output_shape: [32, 80, 2]

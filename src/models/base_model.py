@@ -11,16 +11,13 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricCollection, MetricTracker
-from src.models.base_model_eval import on_train_epoch_end as run_train_epoch_end
-from src.models.base_model_eval import (
-    on_test_epoch_end as run_test_epoch_end,
-    on_validation_epoch_end as run_validation_epoch_end,
-)
-from src.models.base_model_eval import update_metrics_for_batch
-from src.models.base_model_logging import log_training_step_stats
-from src.models.base_model_proxy import compute_proxy_batch_loss
-from src.models.base_model_stats import masked_abs_mean
 from src.utils import load_best_checkpoint, log_model_artifact
+from utils.eval import on_test_epoch_end as run_test_epoch_end
+from utils.eval import on_train_epoch_end as run_train_epoch_end
+from utils.eval import on_validation_epoch_end as run_validation_epoch_end
+from utils.eval import update_metrics_for_batch
+from utils.logging import log_training_step_stats
+from utils.proxy import compute_proxy_batch_loss
 
 
 class BaseDiffusionModel(L.LightningModule):
@@ -57,9 +54,7 @@ class BaseDiffusionModel(L.LightningModule):
             [instantiate(m) for m in self.metrics.train]
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
-        self.metrics_test = MetricCollection(
-            [instantiate(m) for m in self.metrics.val]
-        )
+        self.metrics_test = MetricCollection([instantiate(m) for m in self.metrics.val])
         self.train_loss_tracker = MetricTracker("train_loss")
         self.val_loss_tracker = MetricTracker("val_loss", "val_proxy_loss")
         self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
@@ -110,7 +105,7 @@ class BaseDiffusionModel(L.LightningModule):
         scheduler_cfg = getattr(self, "lr_scheduler_cfg", None)
         if scheduler_cfg is not None:
             name = str(scheduler_cfg.get("name", "none")).lower()
-        
+
         if scheduler_cfg is None or name in {"none", "off", "disabled"}:
             learning_rate = float(base_lr)
             self.learning_rate_schedule = learning_rate
@@ -163,17 +158,15 @@ class BaseDiffusionModel(L.LightningModule):
                 self.model,
                 self.train_key,
                 self.opt_state,
-            ) = (
-                BaseDiffusionModel.make_step(
-                    self.model,
-                    self.batch_loss_and_stats_fn,
-                    self.int_beta,
-                    batch,
-                    self.t1,
-                    self.train_key,
-                    self.opt_state,
-                    self.optim.update,
-                )
+            ) = BaseDiffusionModel.make_step(
+                self.model,
+                self.batch_loss_and_stats_fn,
+                self.int_beta,
+                batch,
+                self.t1,
+                self.train_key,
+                self.opt_state,
+                self.optim.update,
             )
             self.train_loss_tracker.update("train_loss", jnp.asarray(value))
             log_training_step_stats(
@@ -248,21 +241,11 @@ class BaseDiffusionModel(L.LightningModule):
             opt_state,
         )
 
-
     def _sampling_t0(self):
         # Override hook for subclasses that need a different sampling start
         if hasattr(self, "t0"):
             return float(self.t0)
         return 1e-3
-
-    def _oracle_enabled(self, key):
-        # Override hook for debug subclass
-        del key
-        return False
-
-    def _oracle_sampling_mode(self):
-        # Override hook for debug subclass
-        return "exact"
 
     def _should_run_metrics_this_epoch(self, split):
         every_n = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
@@ -284,82 +267,34 @@ class BaseDiffusionModel(L.LightningModule):
             key,
         )
 
-    @staticmethod
-    def batch_loss_and_stats_fn(model, int_beta, batch, t1, key):
+    def batch_loss_and_stats_fn(self, model, int_beta, batch, t1, key):
         batch_size = batch["agent_future"].shape[0]
         tkey, losskey = jr.split(key)
         losskey = jr.split(losskey, batch_size)
         t_min = min(0.1, float(t1) * 0.5)
         t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t1)
-        loss_fn = partial(BaseDiffusionModel.single_loss_and_stats_fn, model, int_beta)
+        loss_fn = partial(self.single_loss_and_stats_fn, model, int_beta)
         loss_fn = jax.vmap(loss_fn)
-        losses, stats = loss_fn(batch, t, losskey)
-        mean_stats = {name: jnp.mean(value) for name, value in stats.items()}
-        return jnp.mean(losses), mean_stats
+        losses = loss_fn(batch, t, losskey)
+        return jnp.mean(losses)
 
-    @staticmethod
     def batch_loss_fn(model, int_beta, batch, t1, key):
-        loss, _ = BaseDiffusionModel.batch_loss_and_stats_fn(model, int_beta, batch, t1, key)
+        loss = BaseDiffusionModel.batch_loss_and_stats_fn(
+            model, int_beta, batch, t1, key
+        )
         return loss
 
-    @staticmethod
-    def batch_loss_fn_fixed_t(
-        model, int_beta, batch, t, key
-    ):
+    def batch_loss_fn_fixed_t(self, model, int_beta, batch, t, key):
         batch_size = batch["agent_future"].shape[0]
         losskey = jr.split(key, batch_size)
         t = jnp.full((batch_size,), t, dtype=jnp.float32)
-        loss_fn = partial(BaseDiffusionModel.single_loss_and_stats_fn, model, int_beta)
+        loss_fn = partial(self.single_loss_and_stats_fn, model, int_beta)
         loss_fn = jax.vmap(loss_fn)
         losses, _ = loss_fn(batch, t, losskey)
         return jnp.mean(losses)
 
-    @staticmethod
     def single_loss_and_stats_fn(model, int_beta, batch, t, key):
-        """
-        OU process provides analytical mean and variance
-        int_beta(t) = ß = θ
-        E[X_t] = μ + exp[-θ t] ( X_0 - μ) w/ μ=0 gives =X_0 * exp[ - θ t ]
-        V[X_t] = σ^2/(2θ) ( 1 - exp(-2 θ t) ) w/ σ^2=ß=θ gives = 1 - exp(-2 ß t)
-        :param model:
-        :param weight:
-        :param int_beta:
-        :param batch:
-        :param t:
-        :param key:
-        :return:
-        """
-        gt_xy = batch["agent_future"][..., :2]
-        INPUT_DIM = gt_xy.shape
-        mean = gt_xy * jnp.exp(-0.5 * int_beta(t))
-        var = jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5)
-        std = jnp.sqrt(var)
-        noise = jr.normal(key, INPUT_DIM)
-        y = mean + std * noise
-        pred_xy = model(t, y, batch["agent_past"])
-        err = (pred_xy - gt_xy) ** 2
-        weights = (
-            jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[..., None, None]
-            * jnp.asarray(batch["agent_future_valid"], dtype=err.dtype)
-        )
-        weights = jnp.broadcast_to(weights, err.shape)
-        weighted_element_count = jnp.ones_like(err) * weights
-        loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
-        valid_weights = jnp.asarray(batch["agent_future_valid"], dtype=gt_xy.dtype)
-        stats = {
-            "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
-            "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
-            "valid_ratio": jnp.mean(valid_weights),
-        }
-        return loss, stats
-
-    def on_fit_start(self) -> None:
-        self.CHECKPOINT_ROOT.mkdir(exist_ok=True)
-        if self.load_best_checkpoint_flag:
-            try:
-                load_best_checkpoint(self)
-            except:
-                print("Didnt load weights")
+        raise NotADirectoryError("Should Implement loss in derived class")
 
     def on_fit_end(self):
         log_model_artifact(self)
@@ -397,12 +332,10 @@ class BaseDiffusionModel(L.LightningModule):
         num_solutions=1,
         predict_shape=None,
         save_full=False,
-        oracle_gt_xy=None,
     ):
         """
         Sample trajectory predictions and average over multiple stochastic draws.
         """
-        del oracle_gt_xy
         self.sample_key, key = jr.split(self.sample_key)
         sample_keys = jr.split(key, num_solutions)
         # The sampler returns one trajectory per random seed, then averages them

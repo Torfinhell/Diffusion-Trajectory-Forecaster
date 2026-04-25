@@ -11,12 +11,6 @@ lr_scheduler:
   name: cosine
   decay_steps: 230
   end_lr: 7e-4
-oracle_cfg:
-  use_for_train_loss: false
-  use_for_val_loss: false
-  use_for_sampling: false
-  sampling_mode: exact
-  sampling_t0: 0.001
 num_agents: 32
 time_len: 11
 num_feat: 9

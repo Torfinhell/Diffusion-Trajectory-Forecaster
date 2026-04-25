@@ -1,34 +1,55 @@
+import pandas as pd
+
+
 class MetricTracker:
-    def __init__(self, *names):
-        self._names = list(names)
+    """
+    Class to aggregate metrics from many batches.
+    """
+
+    def __init__(self, metrics, writer=None):
+        """
+        Args:
+            *keys (list[str]): list (as positional arguments) of metric
+                names (may include the names of losses)
+            writer (WandBWriter | CometMLWriter | None): experiment tracker.
+                Not used in this code version. Can be used to log metrics
+                from each batch.
+        """
+        self.writer = writer
+        self.metrics = metrics
         self.reset()
 
-    def add(self, name):
-        if name in self._totals:
-            return
-        self._names.append(name)
-        self._totals[name] = 0.0
-        self._counts[name] = 0
-
     def reset(self):
-        self._totals = {name: 0.0 for name in self._names}
-        self._counts = {name: 0 for name in self._names}
+        """
+        Reset all metrics after epoch end.
+        """
+        if self.metrics is None:
+            return
+        for met in self.metrics:
+            met.reset()
 
-    def update(self, name, value, n=1):
-        if name not in self._totals:
-            self.add(name)
-        self._totals[name] += float(value) * int(n)
-        self._counts[name] += int(n)
+    def update(self, batch):
+        """
+        Update metrics DataFrame with new value.
 
-    def avg(self, name):
-        count = self._counts.get(name, 0)
-        if count == 0:
-            return None
-        return self._totals[name] / count
+        Args:
+            key (str): metric name.
+            value (float): metric value on the batch.
+            n (int): how many times to count this value.
+        """
+        if self.metrics is None:
+            return
+        for met in self.metrics:
+            met.update(**batch)
 
     def result(self):
-        return {
-            name: self._totals[name] / self._counts[name]
-            for name in self._names
-            if self._counts[name] > 0
-        }
+        """
+        Return average value of each metric.
+
+        Returns:
+            average_metrics (dict): dict, containing average metrics
+                for each metric name.
+        """
+        if self.metrics is None:
+            return {}
+        return {met.name: met.compute() for met in self.metrics}

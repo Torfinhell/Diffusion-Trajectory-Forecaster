@@ -7,7 +7,7 @@ import jax.random as jr
 import optax
 
 from .base_model import BaseDiffusionModel
-from .base_model_debuggable import DebuggableBaseDiffusionModel
+from .base_model_debug import DebuggableBaseDiffusionModel
 
 
 class DiffDenoiser(eqx.Module):

@@ -1,7 +1,0 @@
-defaults:
-  - data: processed_v1
-  - dataset_creation: default
-  - _self_
-
-flush_every: 512
-storage_format: directory_chunks

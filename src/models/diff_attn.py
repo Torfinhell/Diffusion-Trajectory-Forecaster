@@ -9,8 +9,10 @@ import jax.random as jr
 import optax
 from einops import rearrange, repeat
 
+from utils.stats import masked_abs_mean
+
 from .base_model import BaseDiffusionModel
-from .base_model_debuggable import DebuggableBaseDiffusionModel
+from .base_model_debug import DebuggableBaseDiffusionModel
 
 
 class FourierEmbedding(eqx.Module):
@@ -270,11 +272,13 @@ class DiffAttention(eqx.Module):
         if x_t.ndim == 3:
             x_t = x_t[None, ...]
         elif x_t.ndim != 4:
-            raise ValueError(f"DiffAttention expected x_t with 3 or 4 dims, got {x_t.shape}")
+            raise ValueError(
+                f"DiffAttention expected x_t with 3 or 4 dims, got {x_t.shape}"
+            )
         KV_cond = self.scene_encoder(cond)  # (A, out_dim)
         _, a, t, f = x_t.shape
-        x_t = x_t.reshape(a, -1) + self.embed_future(t_noise)   # (A, dim) + (dim,)
-        KV_cond = KV_cond + self.embed_past(t_noise)             # (A, out_dim) + (out_dim,)
+        x_t = x_t.reshape(a, -1) + self.embed_future(t_noise)  # (A, dim) + (dim,)
+        KV_cond = KV_cond + self.embed_past(t_noise)  # (A, out_dim) + (out_dim,)
         for layer in self.sa_mlp_layers:
             x_t = layer(x_t)
         for layer in self.ca_mlp_layers:
@@ -294,7 +298,7 @@ class _DiffusionAttentionBase:
         output_shape: list[int],
         lr=4e-4,
         lr_scheduler=None,
-        **kwargs
+        **kwargs,
     ):
         self.se_args = se_args
         self.samlp_args = samlp_args
@@ -329,6 +333,43 @@ class _DiffusionAttentionBase:
         self.t0 = 1e-3
         self.t1 = 2.0
         self.dt0 = 0.01
+
+    def single_loss_and_stats_fn(model, int_beta, batch, t, key):
+        """
+        OU process provides analytical mean and variance
+        int_beta(t) = ß = θ
+        E[X_t] = μ + exp[-θ t] ( X_0 - μ) w/ μ=0 gives =X_0 * exp[ - θ t ]
+        V[X_t] = σ^2/(2θ) ( 1 - exp(-2 θ t) ) w/ σ^2=ß=θ gives = 1 - exp(-2 ß t)
+        :param model:
+        :param weight:
+        :param int_beta:
+        :param batch:
+        :param t:
+        :param key:
+        :return:
+        """
+        gt_xy = batch["agent_future"][..., :2]
+        INPUT_DIM = gt_xy.shape
+        mean = gt_xy * jnp.exp(-0.5 * int_beta(t))
+        var = jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5)
+        std = jnp.sqrt(var)
+        noise = jr.normal(key, INPUT_DIM)
+        y = mean + std * noise
+        pred_xy = model(t, y, batch["agent_past"])
+        err = (pred_xy - gt_xy) ** 2
+        weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[
+            ..., None, None
+        ] * jnp.asarray(batch["agent_future_valid"], dtype=err.dtype)
+        weights = jnp.broadcast_to(weights, err.shape)
+        weighted_element_count = jnp.ones_like(err) * weights
+        loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
+        valid_weights = jnp.asarray(batch["agent_future_valid"], dtype=gt_xy.dtype)
+        stats = {
+            "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
+            "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
+            "valid_ratio": jnp.mean(valid_weights),
+        }
+        return loss, stats
 
 
 class DiffusionAttentionModel(_DiffusionAttentionBase, BaseDiffusionModel):
