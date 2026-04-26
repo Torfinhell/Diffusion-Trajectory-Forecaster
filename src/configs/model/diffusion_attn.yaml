@@ -1,4 +1,4 @@
-_target_: src.models.DiffusionAttentionModel
+_target_: src.models.diff_attn._DiffusionAttentionBase
 seed: ${trainer.seed}
 load_best_checkpoint: ${trainer.load_best_checkpoint}
 cfg_metrics: ${metrics}

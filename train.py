@@ -9,7 +9,6 @@ from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
 from src.utils import (
-    ClearMLFlushCallback,
     JaxProfilerCallback,
     load_best_checkpoint,
     log_run_metadata,
@@ -28,7 +27,7 @@ def main(cfg) -> None:
         )
     log_run_metadata(logger, hparams)
     dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
-    callbacks = [RichProgressBar(leave=True), ClearMLFlushCallback()]
+    callbacks = [RichProgressBar(leave=True)]
     if cfg.trainer.enable_jax_profiler:
         jax_profiler_dir = cfg.trainer.get("jax_profiler_dir")
         if jax_profiler_dir is None:

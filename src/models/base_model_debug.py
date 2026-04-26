@@ -4,21 +4,21 @@ import jax.random as jr
 import numpy as np
 
 from src.models.base_model import BaseDiffusionModel
-from src.models.base_model_debug import (
+from src.utils.debug import (
     compute_one_step_denoise_ade,
     debug_denoiser_scale,
     debug_metric_sample,
     debug_training_shapes,
 )
-from utils.eval import image_log_name, log_images, mask_pred_for_plot, metric_log_name
-from utils.eval import on_test_epoch_end as run_test_epoch_end
-from utils.eval import on_validation_epoch_end as run_validation_epoch_end
-from utils.eval import plot_vis_kwargs, to_world_frame
-from utils.logging import log_training_step_stats
-from utils.oracle import compute_batch_loss as compute_oracle_batch_loss
-from utils.oracle import oracle_enabled, oracle_sampling_mode, sampling_t0
-from utils.proxy import compute_proxy_batch_loss
-from utils.stats import batch_target_stats
+from src.utils.eval import image_log_name, log_images, mask_pred_for_plot, metric_log_name
+from src.utils.eval import on_test_epoch_end as run_test_epoch_end
+from src.utils.eval import on_validation_epoch_end as run_validation_epoch_end
+from src.utils.eval import plot_vis_kwargs, to_world_frame
+from src.utils.logging import log_training_step_stats
+from src.utils.oracle import compute_batch_loss as compute_oracle_batch_loss
+from src.utils.oracle import oracle_enabled, oracle_sampling_mode, sampling_t0
+from src.utils.proxy import compute_proxy_batch_loss
+from src.utils.stats import batch_target_stats
 
 
 class DebuggableBaseDiffusionModel(BaseDiffusionModel):

@@ -12,12 +12,12 @@ from hydra.utils import instantiate
 
 from src.metrics import MetricCollection, MetricTracker
 from src.utils import load_best_checkpoint, log_model_artifact
-from utils.eval import on_test_epoch_end as run_test_epoch_end
-from utils.eval import on_train_epoch_end as run_train_epoch_end
-from utils.eval import on_validation_epoch_end as run_validation_epoch_end
-from utils.eval import update_metrics_for_batch
-from utils.logging import log_training_step_stats
-from utils.proxy import compute_proxy_batch_loss
+from src.utils.eval import on_test_epoch_end as run_test_epoch_end
+from src.utils.eval import on_train_epoch_end as run_train_epoch_end
+from src.utils.eval import on_validation_epoch_end as run_validation_epoch_end
+from src.utils.eval import update_metrics_for_batch
+from src.utils.logging import log_training_step_stats
+from src.utils.proxy import compute_proxy_batch_loss
 
 
 class BaseDiffusionModel(L.LightningModule):
@@ -36,6 +36,9 @@ class BaseDiffusionModel(L.LightningModule):
         grad_clip=None,
         trainer_cfg=None,
         prediction_target="x0",
+        t0=1e-3,
+        t1=2.0,
+        dt0=0.01,
         **kwargs,
     ):
         super().__init__()
@@ -53,7 +56,7 @@ class BaseDiffusionModel(L.LightningModule):
             self.grad_clip = None
         self.load_best_checkpoint_flag = load_best_checkpoint
         self.samples = 10
-        self.global_step_ = 0  # TODO
+        self.global_step_ = 0
         self.metrics_train = MetricCollection(
             [instantiate(m) for m in self.metrics.train]
         )
@@ -85,6 +88,10 @@ class BaseDiffusionModel(L.LightningModule):
             float("inf") if self.best_checkpoint_mode == "min" else float("-inf")
         )
         self.best_checkpoint_epoch = None
+        self.int_beta = lambda t: t
+        self.t0 = float(t0)
+        self.t1 = float(t1)
+        self.dt0 = float(dt0)
         self.model = instantiate(model, key=key_model)
         self.loss_fn = instantiate(loss)
         self.learning_rate_schedule = (
@@ -97,7 +104,6 @@ class BaseDiffusionModel(L.LightningModule):
         self.optim = self.clip_optimizer(optimizer_transform)
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
         self.loss_fn = self.loss_fn
-        self.configure_ddpm_scheduler()
         self.data_shape = None
 
     def clip_optimizer(self, optimizer):
@@ -106,6 +112,10 @@ class BaseDiffusionModel(L.LightningModule):
             transforms.append(optax.clip_by_global_norm(self.grad_clip))
         transforms.append(optimizer)
         return optax.chain(*transforms)
+
+    def configure_optimizers(self):
+        # Lightning requirement 
+        return []
 
     def training_step(self, batch):
         with jax.profiler.StepTraceAnnotation("train", step_num=int(self.global_step_)):
@@ -149,7 +159,14 @@ class BaseDiffusionModel(L.LightningModule):
             "validation", step_num=int(self.current_epoch)
         ):
             self.loader_key, val_key = jr.split(self.loader_key)
-            value = self.compute_batch_loss(batch, val_key)
+            value, _ = self.batch_loss_fn(
+                self.model,
+                self.loss_fn,
+                self.int_beta,
+                batch,
+                self.t1,
+                val_key,
+            )
             self.val_loss_tracker.update("val_loss", jnp.asarray(value))
             if bool(self.proxy_val_cfg.get("enabled", False)):
                 self.loader_key, proxy_key = jr.split(self.loader_key)
@@ -174,7 +191,7 @@ class BaseDiffusionModel(L.LightningModule):
     @eqx.filter_jit
     def make_step(
         model,
-        batch_loss,
+        loss_fn,
         int_beta,
         batch,
         t1,
@@ -182,8 +199,10 @@ class BaseDiffusionModel(L.LightningModule):
         opt_state,
         opt_update,
     ):
-        loss_fn = eqx.filter_value_and_grad(batch_loss, has_aux=True)
-        (loss, train_stats), grads = loss_fn(model, int_beta, batch, t1, key)
+        grad_fn = eqx.filter_value_and_grad(
+            BaseDiffusionModel.batch_loss_fn, has_aux=True
+        )
+        (loss, train_stats), grads = grad_fn(model, loss_fn, int_beta, batch, t1, key)
         grad_norm = optax.global_norm(grads)
         updates, opt_state = opt_update(grads, opt_state)
         update_norm = optax.global_norm(updates)
@@ -202,17 +221,18 @@ class BaseDiffusionModel(L.LightningModule):
         )
 
     @staticmethod
-    def batch_loss_fn(model, loss_fn, int_beta, batch, t, key):
+    def batch_loss_fn(model, loss_fn, int_beta, batch, t1, key):
         # debug class overrides it
         batch_size = batch["agent_future"].shape[0]
         tkey, losskey = jr.split(key)
         losskey = jr.split(losskey, batch_size)
-        t_min = min(0.1, float(t) * 0.5)
-        t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t)
+        t_min = min(0.1, float(t1) * 0.5)
+        t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t1)
         loss_fn = partial(loss_fn, model, int_beta)
         loss_fn = jax.vmap(loss_fn)
-        losses = loss_fn(batch, t, losskey)
-        return jnp.mean(losses)
+        losses, stats = loss_fn(batch, t, losskey)
+        mean_stats = jax.tree_util.tree_map(lambda value: jnp.mean(value, axis=0), stats)
+        return jnp.mean(losses), mean_stats
 
     def sample_multiple_sol(
         self,
@@ -229,11 +249,7 @@ class BaseDiffusionModel(L.LightningModule):
         # The sampler returns one trajectory per random seed, then averages them
         # into a single prediction for downstream metrics/logging.
         sample_one = lambda kk: self.sample_one_sol(
-            model=self.model,
-            int_beta=self.int_beta,
             data_shape=predict_shape,
-            dt0=self.dt0,
-            t1=self.t1,
             context=context,
             save_full=save_full,
             key=kk,
@@ -243,7 +259,7 @@ class BaseDiffusionModel(L.LightningModule):
 
     @eqx.filter_jit
     def sample_one_sol(
-        self, model, int_beta, data_shape, dt0, t1, context, save_full=False, key=None
+        self, data_shape, context, save_full=False, key=None
     ):
         raise NotImplementedError("Should implement Sample one sol in derived class")
 
@@ -253,6 +269,9 @@ class BaseDiffusionModel(L.LightningModule):
 
     def on_fit_end(self):
         log_model_artifact(self)
+
+    def on_train_epoch_start(self) -> None:
+        self.train_loss_tracker.reset()
 
     def on_train_epoch_end(self) -> None:
         return run_train_epoch_end(self)

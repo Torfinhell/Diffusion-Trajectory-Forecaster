@@ -4,7 +4,6 @@ import logging
 import shutil
 from pathlib import Path
 
-import hydra
 import jax
 import jax.numpy as jnp
 import webdataset as wds
@@ -53,28 +52,46 @@ class Dataset:
         return cleaned
 
     @staticmethod
-    def _to_plain_data(node):
-        if hasattr(node, "items"):
-            return {key: Dataset._to_plain_data(value) for key, value in node.items()}
-        if isinstance(node, list):
-            return [Dataset._to_plain_data(value) for value in node]
-        return node
-
-    @staticmethod
-    def resolve_webdataset_output_root(processed_path) -> Path:
-        processed_path = Path(processed_path)
-        suffix = processed_path.suffix or ".data"
-        return processed_path.with_suffix(f"{suffix}.wds")
-
-    @staticmethod
     def _read_num_samples(output_root: Path) -> int:
         index_path = output_root / WEBDATASET_INDEX_FILENAME
-        if not index_path.exists():
-            raise RuntimeError(f"WebDataset index not found at {index_path}")
+        assert index_path.exists(), f"WebDataset index not found at {index_path}"
         loaded = json.loads(index_path.read_text(encoding="utf-8"))
-        if loaded.get("format") != WEBDATASET_FORMAT:
-            raise RuntimeError(f"Unsupported dataset format in {index_path}")
+        assert  loaded.get("format") == WEBDATASET_FORMAT, f"Unsupported dataset format in {index_path}"
         return int(loaded.get("num_samples", 0))
+
+    @classmethod
+    def ensure_local_webdataset(
+        cls,
+        split: str,
+        split_cfg,
+        processed_path: str,
+        creation_cfg=None,
+        flush_every: int = DEFAULT_FLUSH_EVERY,
+    ) -> Path:
+        output_root = Path(to_absolute_path(processed_path))
+        index_path = output_root / WEBDATASET_INDEX_FILENAME
+        if index_path.exists():
+            return output_root
+
+        if creation_cfg is not None:
+            LOGGER.info(
+                "WebDataset artifact not found at %s. Creating %s split locally.",
+                output_root,
+                split,
+            )
+            builder = cls(flush_every=int(split_cfg.get("flush_every", flush_every)))
+            builder.create_split(
+                split=split,
+                artifact_cfg=split_cfg,
+                creation_cfg=creation_cfg,
+            )
+            if not index_path.exists():
+                raise FileNotFoundError(f"WebDataset index not found at {index_path}.")
+            return output_root
+
+        raise FileNotFoundError(
+            f"WebDataset artifact not found at {output_root} and no creation config was provided."
+        )
 
     @staticmethod
     def build_waymax_iterator(raw_data_url, waymax_conf_version, max_num_objects):
@@ -90,6 +107,7 @@ class Dataset:
         self,
         raw_data_url,
         waymax_conf_version,
+        start_index,
         num_states,
         max_num_objects,
         extract_scene,
@@ -100,8 +118,12 @@ class Dataset:
             waymax_conf_version=waymax_conf_version,
             max_num_objects=max_num_objects,
         )
+        start_index = int(start_index)
+        num_states = int(num_states)
         produced = 0
-        for index in tqdm(range(num_states), total=num_states, desc="Creating dataset"):
+        total_to_read = start_index + num_states
+
+        for index in tqdm(range(total_to_read), total=total_to_read, desc="Creating dataset"):
             try:
                 state = next(iterator)
             except Exception as exc:
@@ -113,10 +135,13 @@ class Dataset:
                 LOGGER.warning(
                     "Stopped dataset creation after %s/%s states: %s",
                     index,
-                    num_states,
+                    total_to_read,
                     exc,
                 )
                 break
+
+            if index < start_index:
+                continue
 
             batched_scenario = jax.tree_util.tree_map(lambda x: x[None, ...], state)
             processed = self._strip_leading_batch_axis(
@@ -130,9 +155,8 @@ class Dataset:
                 break
 
     def save_processed_samples(self, processed_path, samples):
-        if self.flush_every <= 0:
-            raise RuntimeError("flush_every must be a positive integer.")
-        output_root = self.resolve_webdataset_output_root(processed_path)
+        assert self.flush_every > 0, "flush_every must be a positive integer"
+        output_root = Path(processed_path)
         output_root.parent.mkdir(parents=True, exist_ok=True)
         if output_root.exists():
             shutil.rmtree(output_root)
@@ -168,10 +192,11 @@ class Dataset:
         samples = self.iter_processed_samples(
             raw_data_url=creation_cfg.raw_data_url,
             waymax_conf_version=creation_cfg.waymax_conf_version,
+            start_index=getattr(creation_cfg, "start_index", 0),
             num_states=creation_cfg.num_states,
             max_num_objects=creation_cfg.max_num_objects,
             extract_scene=creation_cfg.extract_scene,
-            preprocess_kwargs=self._to_plain_data(creation_cfg.preprocessing),
+            preprocess_kwargs=creation_cfg.preprocessing,
         )
 
         LOGGER.info(
@@ -195,7 +220,7 @@ class Dataset:
             created[split] = self.create_split(
                 split=split,
                 artifact_cfg=cfg.data[split],
-                creation_cfg=cfg.dataset_creation[split],
+                creation_cfg=cfg.data[split].creation,
             )
         return created
 
@@ -207,9 +232,12 @@ class Dataset:
         return payload
 
     @classmethod
-    def build_webdataset(cls, split_cfg, is_train: bool):
-        output_root = cls.resolve_webdataset_output_root(
-            Path(to_absolute_path(split_cfg.processed_path))
+    def build_webdataset(cls, split: str, split_cfg, is_train: bool):
+        output_root = cls.ensure_local_webdataset(
+            split=split,
+            split_cfg=split_cfg,
+            processed_path=split_cfg.processed_path,
+            creation_cfg=split_cfg.get("creation"),
         )
         index_path = output_root / WEBDATASET_INDEX_FILENAME
         metadata = json.loads(index_path.read_text(encoding="utf-8"))

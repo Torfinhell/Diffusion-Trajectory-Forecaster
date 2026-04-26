@@ -7,7 +7,7 @@ import numpy as np
 def proxy_t_values(model):
     step_stride = max(1, int(model.proxy_val_cfg.get("step_stride", 5)))
     include_last = bool(model.proxy_val_cfg.get("include_last", True))
-    t0 = float(model._sampling_t0())
+    t0 = float(getattr(model, "t0", 1e-3))
     t1 = float(model.t1)
     dt0 = abs(float(getattr(model, "dt0", 0.01)))
     num_steps = max(1, int(np.ceil((t1 - t0) / dt0)))

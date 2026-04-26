@@ -1,15 +1,14 @@
 defaults:
   - model: diffusion_attn
   - dataloaders: basic
-  - data: small_base_v2_no_scenes
+  - feat_extract: small_no_scenes
   - transforms: null
   - logger: clearml
   - metrics: all_metrics
-  - optuna: default
   - visual: default
   - _self_
 trainer:
-  num_epochs: 20
+  num_epochs: 150
   train_epoch_len: 1.0
   val_epoch_len: 1.0
   gradient_clip_val: 5.0
@@ -32,6 +31,6 @@ trainer:
   jax_profiler_start_step: 2
   jax_profiler_num_steps: 3
   proxy_val_loss:
-    enabled: true
+    enabled: false
     step_stride: 5
     include_last: true

@@ -1,0 +1,44 @@
+# @package _global_
+data:
+  train:
+    dvc_file: "data/small_base_v2_no_scenes.dvc"
+    processed_path: "data/small_base_v2_no_scenes/train_small_base_v2_no_scenes.wds"
+    flush_every: 512
+    shuffle_buffer: 256
+    creation:
+      raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000"
+      waymax_conf_version: "WOD_1_3_1_TRAINING"
+      num_states: 2000
+      max_num_objects: 32
+      extract_scene: false
+      preprocessing:
+        current_index: 10
+        use_full_agent_info: true
+  val:
+    dvc_file: "data/small_base_v2_no_scenes.dvc"
+    processed_path: "data/small_base_v2_no_scenes/val_small_base_v2_no_scenes.wds"
+    flush_every: 512
+    creation:
+      raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
+      waymax_conf_version: "WOD_1_3_1_TRAINING"
+      start_index: 0
+      num_states: 200
+      max_num_objects: 32
+      extract_scene: false
+      preprocessing:
+        current_index: 10
+        use_full_agent_info: true
+  test:
+    dvc_file: "data/small_base_v2_no_scenes.dvc"
+    processed_path: "data/small_base_v2_no_scenes/test_small_base_v2_no_scenes.wds"
+    flush_every: 512
+    creation:
+      raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
+      waymax_conf_version: "WOD_1_3_1_TRAINING"
+      start_index: 200
+      num_states: 100
+      max_num_objects: 32
+      extract_scene: false
+      preprocessing:
+        current_index: 10
+        use_full_agent_info: true

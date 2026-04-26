@@ -74,7 +74,6 @@ def update_metrics_for_batch(model, metrics, batch, return_first_prediction=Fals
             batch["agent_past"][sample_idx],
             num_solutions=num_solutions,
             predict_shape=gt_xy.shape,
-            oracle_gt_xy=(gt_xy if model._oracle_enabled("use_for_sampling") else None),
         )
         metrics.update(
             pred_xy,
@@ -89,7 +88,11 @@ def update_metrics_for_batch(model, metrics, batch, return_first_prediction=Fals
 
 
 def on_train_epoch_end(model):
-    train_losses = model.train_loss_tracker.result()
+    train_losses = {
+        #otherwise it is ArrayImpl
+        key: float(jnp.asarray(value))
+        for key, value in model.train_loss_tracker.result().items()
+    }
     if "train_loss" in train_losses:
         model.log(
             metric_log_name("train", "loss"),
@@ -163,7 +166,11 @@ def on_train_epoch_end(model):
 
 def on_validation_epoch_end(model):
     checkpoint_metrics = {}
-    val_losses = model.val_loss_tracker.result()
+    val_losses = {
+        #otherwise it is ArrayImpl
+        key: float(jnp.asarray(value))
+        for key, value in model.val_loss_tracker.result().items()
+    }
     if "val_loss" in val_losses:
         model.log(
             metric_log_name("val", "loss"),

@@ -1,4 +1,4 @@
-from src.utils.callbacks import ClearMLFlushCallback, JaxProfilerCallback
+from src.utils.callbacks import JaxProfilerCallback
 from src.utils.checkpoints import (
     load_best_checkpoint,
     log_model_artifact,
