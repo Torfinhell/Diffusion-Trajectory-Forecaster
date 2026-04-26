@@ -1,7 +1,4 @@
 _target_: src.models.DiffAttention
-num_agents: 32
-time_len: 11
-num_feat: 9
 se_args:
   rnn_type: "mhsa" # one of "lstm" "mhsa"
   rnn_num_heads: 1
@@ -9,9 +6,9 @@ se_args:
   drop_attn: 0.1
   mlp_dim: 60
   num_mlp_layers: 2
-  num_agents: ${model.num_agents}
-  time_len: ${model.time_len}
-  num_feat: ${model.num_feat}
+  num_agents: 32
+  time_len: 11
+  num_feat: 9
   out_dim: 40
   pos_emb_type: "lookup" #one of "rope", "lookup", "None"
   rope_theta: 0.1

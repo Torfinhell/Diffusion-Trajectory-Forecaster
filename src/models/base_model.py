@@ -1,6 +1,8 @@
 from functools import partial
 from pathlib import Path
 
+from torchgen import model
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -34,9 +36,9 @@ class Basetreainer(L.LightningModule):
         dt0=0.01,
         **kwargs,
     ):
-        del kwargs
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["kwargs"])
+        del kwargs
         self.automatic_optimization = False
         self.key = jax.random.PRNGKey(seed)
         self.key, key_model, self.train_key, self.loader_key, self.sample_key = (
@@ -99,8 +101,7 @@ class Basetreainer(L.LightningModule):
         return []
 
     def training_step(self, batch):
-        step_out = Basetreainer.make_step(
-            kind="train",
+        step_out = Basetreainer.make_train_step(
             model=self.model,
             loss_fn=self.loss_fn,
             int_beta=self.int_beta,
@@ -114,8 +115,16 @@ class Basetreainer(L.LightningModule):
         self.train_key = step_out["key"]
         self.opt_state = step_out["opt_state"]
         self.train_loss_tracker.update("train_loss", jnp.asarray(step_out["loss"]))
+        log_metrics = self._log_step_metrics(
+            "train",
+            step_out["loss"],
+            step_out["train_stats"],
+            grad_norm=step_out["grad_norm"],
+            update_norm=step_out["update_norm"],
+            param_norm=step_out["param_norm"],
+        )
         self.log_dict(
-            step_out["log_metrics"],
+            log_metrics,
             prog_bar=False,
             on_step=True,
             on_epoch=False,
@@ -125,8 +134,7 @@ class Basetreainer(L.LightningModule):
 
     def validation_step(self, batch):
         self.loader_key, val_key = jr.split(self.loader_key)
-        step_out = self.make_step(
-            kind="val",
+        step_out = self.make_eval_step(
             model=self.model,
             loss_fn=self.loss_fn,
             int_beta=self.int_beta,
@@ -136,8 +144,13 @@ class Basetreainer(L.LightningModule):
         )
         self.loader_key = step_out["key"]
         self.val_loss_tracker.update("val_loss", jnp.asarray(step_out["loss"]))
+        log_metrics = self._log_step_metrics(
+            "val",
+            step_out["loss"],
+            step_out["train_stats"],
+        )
         self.log_dict(
-            step_out["log_metrics"],
+            log_metrics,
             prog_bar=False,
             on_step=True,
             on_epoch=False,
@@ -145,8 +158,7 @@ class Basetreainer(L.LightningModule):
 
     def test_step(self, batch):
         self.loader_key, test_key = jr.split(self.loader_key)
-        step_out = self.make_step(
-            kind="test",
+        step_out = self.make_eval_step(
             model=self.model,
             loss_fn=self.loss_fn,
             int_beta=self.int_beta,
@@ -155,16 +167,43 @@ class Basetreainer(L.LightningModule):
             key=test_key,
         )
         self.loader_key = step_out["key"]
+        log_metrics = self._log_step_metrics(
+            "test",
+            step_out["loss"],
+            step_out["train_stats"],
+        )
         self.log_dict(
-            step_out["log_metrics"],
+            log_metrics,
             prog_bar=False,
             on_step=True,
             on_epoch=False,
         )
 
-    @staticmethod
-    def make_step(
+    @classmethod
+    def _log_step_metrics(
+        cls,
         kind,
+        loss,
+        train_stats,
+        grad_norm=None,
+        update_norm=None,
+        param_norm=None,
+    ):
+        log_metrics = {f"{kind}/loss_step": float(jnp.asarray(loss))}
+        if grad_norm is not None:
+            log_metrics[f"{kind}/grad_norm"] = float(jnp.asarray(grad_norm))
+        if update_norm is not None:
+            log_metrics[f"{kind}/update_norm"] =float(jnp.asarray(update_norm))
+        if param_norm is not None:
+            log_metrics[f"{kind}/param_norm"] = float(jnp.asarray(param_norm))
+        if train_stats is not None:
+            for stat_key, stat_value in train_stats.items():
+                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
+        return log_metrics
+
+    @staticmethod
+    @eqx.filter_jit
+    def make_train_step(
         model,
         loss_fn,
         int_beta,
@@ -174,38 +213,20 @@ class Basetreainer(L.LightningModule):
         opt_state=None,
         opt_update=None,
     ):
-        if kind == "train":
-            grad_fn = eqx.filter_value_and_grad(
-                Basetreainer.batch_loss_fn, has_aux=True
-            )
-            (loss, train_stats), grads = grad_fn(
-                model, loss_fn, int_beta, batch, timesteps, key
-            )
-            grad_norm = optax.global_norm(grads)
-            updates, opt_state = opt_update(grads, opt_state)
-            update_norm = optax.global_norm(updates)
-            model = eqx.apply_updates(model, updates)
-            param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
-        else:
-            loss, train_stats = Basetreainer.batch_loss_fn(
-                model, loss_fn, int_beta, batch, timesteps, key
-            )
-            grad_norm = None
-            update_norm = None
-            param_norm = None
+        grad_fn = eqx.filter_value_and_grad(
+            Basetreainer.batch_loss_fn, has_aux=True
+        )
+        (loss, train_stats), grads = grad_fn(
+            model, loss_fn, int_beta, batch, timesteps, key
+        )
+        grad_norm = optax.global_norm(grads)
+        updates, opt_state = opt_update(grads, opt_state)
+        update_norm = optax.global_norm(updates)
+        model = eqx.apply_updates(model, updates)
+        param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
+
         key = jr.split(key, 1)[0]
-        log_metrics = {f"{kind}/loss_step": float(jnp.asarray(loss))}
-        if grad_norm is not None:
-            log_metrics[f"{kind}/grad_norm"] = float(jnp.asarray(grad_norm))
-        if update_norm is not None:
-            log_metrics[f"{kind}/update_norm"] = float(jnp.asarray(update_norm))
-        if param_norm is not None:
-            log_metrics[f"{kind}/param_norm"] = float(jnp.asarray(param_norm))
-        if train_stats is not None:
-            for stat_key, stat_value in train_stats.items():
-                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
         return {
-            "kind": kind,
             "loss": loss,
             "train_stats": train_stats,
             "grad_norm": grad_norm,
@@ -214,7 +235,36 @@ class Basetreainer(L.LightningModule):
             "model": model,
             "key": key,
             "opt_state": opt_state,
-            "log_metrics": log_metrics,
+        }
+    
+    @staticmethod
+    @eqx.filter_jit
+    def make_eval_step(
+        model,
+        loss_fn,
+        int_beta,
+        batch,
+        timesteps,
+        key,
+        opt_state=None,
+        opt_update=None,
+    ):
+        loss, train_stats = Basetreainer.batch_loss_fn(
+            model, loss_fn, int_beta, batch, timesteps, key
+        )
+        grad_norm = None
+        update_norm = None
+        param_norm = None
+        key = jr.split(key, 1)[0]
+        return {
+            "loss": loss,
+            "train_stats": train_stats,
+            "grad_norm": grad_norm,
+            "update_norm": update_norm,
+            "param_norm": param_norm,
+            "model": model,
+            "key": key,
+            "opt_state": opt_state,
         }
 
     @staticmethod

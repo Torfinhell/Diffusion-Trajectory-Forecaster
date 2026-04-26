@@ -235,7 +235,7 @@ class Dataset:
 
     @staticmethod
     def _decode_sample_fields(sample: dict):
-        metadata_keys = {"__key__", "__local_path__"}
+        metadata_keys = {"__key__", "__url__", "__local_path__"}
         decoded = {}
         for key, value in sample.items():
             if key in metadata_keys:
