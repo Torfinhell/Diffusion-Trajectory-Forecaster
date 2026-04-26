@@ -11,13 +11,6 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricCollection, MetricTracker
-from src.utils import log_model_artifact
-from src.utils.eval import on_test_epoch_end as run_test_epoch_end
-from src.utils.eval import on_train_epoch_end as run_train_epoch_end
-from src.utils.eval import on_validation_epoch_end as run_validation_epoch_end
-from src.utils.eval import update_metrics_for_batch
-from src.utils.logging import log_training_step_stats
-from src.utils.proxy import compute_proxy_batch_loss
 
 
 class Basetreainer(L.LightningModule):
@@ -45,7 +38,6 @@ class Basetreainer(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
-
         self.key = jax.random.PRNGKey(seed)
         self.key, key_model, self.train_key, self.loader_key, self.sample_key = (
             jax.random.split(self.key, 5)
@@ -59,7 +51,6 @@ class Basetreainer(L.LightningModule):
         self.load_best_checkpoint_flag = load_best_checkpoint
         self.samples = 10
         self.global_step_ = 0
-
         self.metrics_train = MetricCollection(
             [instantiate(m) for m in self.metrics.train]
         )
@@ -78,22 +69,6 @@ class Basetreainer(L.LightningModule):
                 f"Unsupported prediction_target '{prediction_target}'. "
                 "Use one of: x0, epsilon, score."
             )
-
-        self.proxy_val_cfg = self.trainer_cfg.get("proxy_val_loss", {})
-        default_best_metric = (
-            "val_proxy_loss" if self.proxy_val_cfg.get("enabled", False) else "val_loss"
-        )
-        self.best_checkpoint_metric = str(
-            self.trainer_cfg.get("best_checkpoint_metric", default_best_metric)
-        )
-        self.best_checkpoint_mode = str(
-            self.trainer_cfg.get("best_checkpoint_mode", "min")
-        ).lower()
-        self.best_checkpoint_score = (
-            float("inf") if self.best_checkpoint_mode == "min" else float("-inf")
-        )
-        self.best_checkpoint_epoch = None
-
         self.int_beta = lambda t: t
         self.t0 = float(t0)
         self.t1 = float(t1)
@@ -124,90 +99,123 @@ class Basetreainer(L.LightningModule):
         return []
 
     def training_step(self, batch):
-        with jax.profiler.StepTraceAnnotation("train", step_num=int(self.global_step_)):
-            (
-                value,
-                train_stats,
-                grad_norm,
-                update_norm,
-                param_norm,
-                self.model,
-                self.train_key,
-                self.opt_state,
-            ) = Basetreainer.make_step(
-                self.model,
-                self.loss_fn,
-                self.int_beta,
-                batch,
-                self.t1,
-                self.train_key,
-                self.opt_state,
-                self.optim.update,
-            )
-            self.train_loss_tracker.update("train_loss", jnp.asarray(value))
-            log_training_step_stats(
-                self,
-                grad_norm=grad_norm,
-                update_norm=update_norm,
-                param_norm=param_norm,
-                train_stats=train_stats,
-            )
-            self.global_step_ += 1
-            if (
-                self._should_run_metrics_this_epoch("train")
-                and len(self._train_batches_for_metrics) < self.train_metric_batches
-            ):
-                self._train_batches_for_metrics.append(batch)
-            return None
+        step_out = Basetreainer.make_step(
+            kind="train",
+            model=self.model,
+            loss_fn=self.loss_fn,
+            int_beta=self.int_beta,
+            batch=batch,
+            timesteps=self.t1,
+            key=self.train_key,
+            opt_state=self.opt_state,
+            opt_update=self.optim.update,
+        )
+        self.model = step_out["model"]
+        self.train_key = step_out["key"]
+        self.opt_state = step_out["opt_state"]
+        self.train_loss_tracker.update("train_loss", jnp.asarray(step_out["loss"]))
+        self.log_dict(
+            step_out["log_metrics"],
+            prog_bar=False,
+            on_step=True,
+            on_epoch=False,
+        )
+        self.global_step_ += 1
+        return None
 
     def validation_step(self, batch):
-        with jax.profiler.StepTraceAnnotation(
-            "validation", step_num=int(self.current_epoch)
-        ):
-            self.loader_key, val_key = jr.split(self.loader_key)
-            value, _ = self.batch_loss_fn(
-                self.model, self.loss_fn, self.int_beta, batch, self.t1, val_key
-            )
-            self.val_loss_tracker.update("val_loss", jnp.asarray(value))
-            if bool(self.proxy_val_cfg.get("enabled", False)):
-                self.loader_key, proxy_key = jr.split(self.loader_key)
-                proxy_value = compute_proxy_batch_loss(self, batch, proxy_key)
-                self.val_loss_tracker.update("val_proxy_loss", jnp.asarray(proxy_value))
-            if (
-                self._should_run_metrics_this_epoch("val")
-                and len(self._val_batches_for_metrics) < self.val_metric_batches
-            ):
-                self._val_batches_for_metrics.append(batch)
+        self.loader_key, val_key = jr.split(self.loader_key)
+        step_out = self.make_step(
+            kind="val",
+            model=self.model,
+            loss_fn=self.loss_fn,
+            int_beta=self.int_beta,
+            batch=batch,
+            timesteps=self.t1,
+            key=val_key,
+        )
+        self.loader_key = step_out["key"]
+        self.val_loss_tracker.update("val_loss", jnp.asarray(step_out["loss"]))
+        self.log_dict(
+            step_out["log_metrics"],
+            prog_bar=False,
+            on_step=True,
+            on_epoch=False,
+        )
 
     def test_step(self, batch):
-        with jax.profiler.StepTraceAnnotation("test", step_num=int(self.current_epoch)):
-            self._update_metrics_for_batch(
-                self.metrics_test,
-                batch,
-                return_first_prediction=False,
-            )
+        self.loader_key, test_key = jr.split(self.loader_key)
+        step_out = self.make_step(
+            kind="test",
+            model=self.model,
+            loss_fn=self.loss_fn,
+            int_beta=self.int_beta,
+            batch=batch,
+            timesteps=self.t1,
+            key=test_key,
+        )
+        self.loader_key = step_out["key"]
+        self.log_dict(
+            step_out["log_metrics"],
+            prog_bar=False,
+            on_step=True,
+            on_epoch=False,
+        )
 
     @staticmethod
-    @eqx.filter_jit
-    def make_step(model, loss_fn, int_beta, batch, t1, key, opt_state, opt_update):
-        grad_fn = eqx.filter_value_and_grad(Basetreainer.batch_loss_fn, has_aux=True)
-        (loss, train_stats), grads = grad_fn(model, loss_fn, int_beta, batch, t1, key)
-        grad_norm = optax.global_norm(grads)
-        updates, opt_state = opt_update(grads, opt_state)
-        update_norm = optax.global_norm(updates)
-        model = eqx.apply_updates(model, updates)
-        param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
+    def make_step(
+        kind,
+        model,
+        loss_fn,
+        int_beta,
+        batch,
+        timesteps,
+        key,
+        opt_state=None,
+        opt_update=None,
+    ):
+        if kind == "train":
+            grad_fn = eqx.filter_value_and_grad(
+                Basetreainer.batch_loss_fn, has_aux=True
+            )
+            (loss, train_stats), grads = grad_fn(
+                model, loss_fn, int_beta, batch, timesteps, key
+            )
+            grad_norm = optax.global_norm(grads)
+            updates, opt_state = opt_update(grads, opt_state)
+            update_norm = optax.global_norm(updates)
+            model = eqx.apply_updates(model, updates)
+            param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
+        else:
+            loss, train_stats = Basetreainer.batch_loss_fn(
+                model, loss_fn, int_beta, batch, timesteps, key
+            )
+            grad_norm = None
+            update_norm = None
+            param_norm = None
         key = jr.split(key, 1)[0]
-        return (
-            loss,
-            train_stats,
-            grad_norm,
-            update_norm,
-            param_norm,
-            model,
-            key,
-            opt_state,
-        )
+        log_metrics = {f"{kind}/loss_step": float(jnp.asarray(loss))}
+        if grad_norm is not None:
+            log_metrics[f"{kind}/grad_norm"] = float(jnp.asarray(grad_norm))
+        if update_norm is not None:
+            log_metrics[f"{kind}/update_norm"] = float(jnp.asarray(update_norm))
+        if param_norm is not None:
+            log_metrics[f"{kind}/param_norm"] = float(jnp.asarray(param_norm))
+        if train_stats is not None:
+            for stat_key, stat_value in train_stats.items():
+                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
+        return {
+            "kind": kind,
+            "loss": loss,
+            "train_stats": train_stats,
+            "grad_norm": grad_norm,
+            "update_norm": update_norm,
+            "param_norm": param_norm,
+            "model": model,
+            "key": key,
+            "opt_state": opt_state,
+            "log_metrics": log_metrics,
+        }
 
     @staticmethod
     def batch_loss_fn(model, loss_fn, int_beta, batch, t1, key):
@@ -224,98 +232,26 @@ class Basetreainer(L.LightningModule):
         )
         return jnp.mean(losses), mean_stats
 
-    def sample_multiple_sol(
-        self,
-        context,
-        num_solutions=1,
-        predict_shape=None,
-        save_full=False,
-        oracle_gt_xy=None,
-    ):
-        del oracle_gt_xy
-        self.sample_key, key = jr.split(self.sample_key)
-        sample_keys = jr.split(key, num_solutions)
-        sample_one = lambda kk: self.sample_one_sol(
-            self.model,
-            self.int_beta,
-            predict_shape,
-            self.dt0,
-            self.t1,
-            context,
-            save_full,
-            kk,
-        )[0]
-        pred_samples = jax.vmap(sample_one)(sample_keys)
-        return jnp.mean(pred_samples, axis=0)
-
-    @eqx.filter_jit
-    def sample_one_sol(
-        self, model, int_beta, data_shape, dt0, t1, context, save_full=False, key=None
-    ):
-        if key is None:
-            self.sample_key, key = jr.split(self.sample_key)
-        y1 = jr.normal(key, data_shape)
-        num_steps = max(1, int(np.ceil((t1 - self.t0) / abs(dt0))))
-        ts = jnp.linspace(t1, self.t0, num_steps + 1)
-        x = y1
-        path = []
-        for step_idx in range(num_steps):
-            t_cur = ts[step_idx]
-            t_next = ts[step_idx + 1]
-            alpha_cur, sigma_cur = self._alpha_sigma(int_beta, t_cur)
-            alpha_next, sigma_next = self._alpha_sigma(int_beta, t_next)
-            pred = model(t_cur, x, context)
-            if self.prediction_target == "x0":
-                x0_pred = pred
-                eps_pred = (x - alpha_cur * x0_pred) / jnp.maximum(sigma_cur, 1e-5)
-            elif self.prediction_target == "epsilon":
-                eps_pred = pred
-                x0_pred = (x - sigma_cur * eps_pred) / jnp.maximum(alpha_cur, 1e-5)
-            else:
-                score_pred = pred
-                eps_pred = -sigma_cur * score_pred
-                x0_pred = (x + (sigma_cur**2) * score_pred) / jnp.maximum(
-                    alpha_cur, 1e-5
-                )
-            x = alpha_next * x0_pred + sigma_next * eps_pred
-            if save_full:
-                path.append(x)
-        if save_full:
-            return jnp.stack(path, axis=0)
-        return x[None, ...]
-
-    @staticmethod
-    def _alpha_sigma(int_beta, t):
-        alpha = jnp.exp(-0.5 * int_beta(t))
-        sigma = jnp.sqrt(jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5))
-        return alpha, sigma
-
-    def _should_run_metrics_this_epoch(self, split):
-        every_n = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
-        return (int(self.current_epoch) + 1) % every_n == 0
-
-    def on_fit_end(self):
-        log_model_artifact(self)
-
-    def on_train_epoch_end(self):
-        return run_train_epoch_end(self)
-
-    def on_validation_epoch_start(self):
-        self.val_loss_tracker.reset()
-
-    def on_validation_epoch_end(self):
-        return run_validation_epoch_end(self)
-
-    def on_test_epoch_end(self):
-        return run_test_epoch_end(self)
-
-    def _update_metrics_for_batch(self, metrics, batch, return_first_prediction=False):
-        return update_metrics_for_batch(
-            self,
-            metrics,
-            batch,
-            return_first_prediction=return_first_prediction,
-        )
-
-
-BaseDiffusionModel = Basetreainer
+    # def sample_multiple_sol(
+    #     self,
+    #     context,
+    #     num_solutions=1,
+    #     predict_shape=None,
+    #     save_full=False,
+    #     oracle_gt_xy=None,
+    # ):
+    #     del oracle_gt_xy
+    #     self.sample_key, key = jr.split(self.sample_key)
+    #     sample_keys = jr.split(key, num_solutions)
+    #     sample_one = lambda kk: self.sample_one_sol(
+    #         self.model,
+    #         self.int_beta,
+    #         predict_shape,
+    #         self.dt0,
+    #         self.t1,
+    #         context,
+    #         save_full,
+    #         kk,
+    #     )[0]
+    #     pred_samples = jax.vmap(sample_one)(sample_keys)
+    #     return jnp.mean(pred_samples, axis=0) TODO

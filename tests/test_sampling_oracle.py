@@ -1,9 +1,9 @@
 import jax.numpy as jnp
 import jax.random as jr
-
 from mocked_model import OracleDiffusionModel
+
 from src.metrics import AdeMetric, FdeMetric
-from src.models.base_model import BaseDiffusionModel
+from src.models.base_model import Basetreainer
 
 
 class _SamplingHarness:
@@ -26,9 +26,9 @@ class _SamplingHarness:
         return self.oracle_cfg["sampling_t0"]
 
 
-_SamplingHarness._alpha_sigma = staticmethod(BaseDiffusionModel._alpha_sigma)
-_SamplingHarness.sample_one_sol = BaseDiffusionModel.sample_one_sol
-_SamplingHarness.sample_multiple_sol = BaseDiffusionModel.sample_multiple_sol
+_SamplingHarness._alpha_sigma = staticmethod(Basetreainer._alpha_sigma)
+_SamplingHarness.sample_one_sol = Basetreainer.sample_one_sol
+_SamplingHarness.sample_multiple_sol = Basetreainer.sample_multiple_sol
 
 
 def _compute_metrics(pred_xy, gt_xy):
@@ -126,9 +126,7 @@ def test_oracle_ode_sampling_matches_closed_form_path():
         y1_override=applied.noisy_xy,
         key=jr.PRNGKey(0),
     )
-    ts = jnp.linspace(
-        harness.t1, harness.oracle_cfg["sampling_t0"], pred_path.shape[0]
-    )
+    ts = jnp.linspace(harness.t1, harness.oracle_cfg["sampling_t0"], pred_path.shape[0])
     expected_path = _closed_form_pf_solution(
         gt_xy[None, ...], applied.noise[None, ...], ts[:, None, None, None]
     )

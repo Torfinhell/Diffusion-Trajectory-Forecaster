@@ -54,24 +54,30 @@ class DebuggableBaseDiffusionModel(Basetreainer):
                 update_norm = None
                 param_norm = None
             else:
-                (
-                    value,
-                    train_stats,
-                    grad_norm,
-                    update_norm,
-                    param_norm,
-                    self.model,
-                    self.train_key,
-                    self.opt_state,
-                ) = Basetreainer.make_step(
-                    self.model,
-                    self.loss_fn,
-                    self.int_beta,
-                    batch,
-                    self.t1,
-                    self.train_key,
-                    self.opt_state,
-                    self.optim.update,
+                step_out = Basetreainer.make_step(
+                    kind="train",
+                    model=self.model,
+                    loss_fn=self.loss_fn,
+                    int_beta=self.int_beta,
+                    batch=batch,
+                    timesteps=self.t1,
+                    key=self.train_key,
+                    opt_state=self.opt_state,
+                    opt_update=self.optim.update,
+                )
+                value = step_out["loss"]
+                train_stats = step_out["train_stats"]
+                grad_norm = step_out["grad_norm"]
+                update_norm = step_out["update_norm"]
+                param_norm = step_out["param_norm"]
+                self.model = step_out["model"]
+                self.train_key = step_out["key"]
+                self.opt_state = step_out["opt_state"]
+                self.log_dict(
+                    step_out["log_metrics"],
+                    prog_bar=False,
+                    on_step=True,
+                    on_epoch=False,
                 )
             self.train_loss_tracker.update("train_loss", jnp.asarray(value))
             log_training_step_stats(
