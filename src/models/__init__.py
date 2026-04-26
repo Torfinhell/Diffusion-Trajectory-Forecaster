@@ -1,2 +1,2 @@
-from src.models.diff_attn import _DiffusionAttentionBase as DiffusionAttentionModel
-from src.models.diff_linear import DiffusionLinearDebugModel, DiffusionLinearModel
+from src.models.diff_attn import DiffAttention
+from src.models.diff_linear import DiffDenoiser

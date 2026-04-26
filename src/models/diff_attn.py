@@ -6,14 +6,7 @@ import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jr
-import numpy as np
-import optax
 from einops import rearrange, repeat
-
-from src.utils.stats import masked_abs_mean
-
-from .base_model import BaseDiffusionModel
-from .base_model_debug import DebuggableBaseDiffusionModel
 
 
 class FourierEmbedding(eqx.Module):
@@ -285,51 +278,3 @@ class DiffAttention(eqx.Module):
         for layer in self.ca_mlp_layers:
             x_t = layer(x_t, KV_cond)
         return jax.vmap(self.mlp_out)(x_t).reshape(self.out_shape)
-
-
-class _DiffusionAttentionBase(BaseDiffusionModel):
-    def __init__(
-        self,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-
-    @eqx.filter_jit
-    def sample_one_sol(
-        self,
-        data_shape,
-        context,
-        num_steps=200,
-        save_full=False,
-        key=None,
-    ):
-        if key is None:
-            self.sample_key, key = jr.split(self.sample_key)
-
-        y1 = jr.normal(key, data_shape)
-        ts = jnp.linspace(self.t1, self.t0, num_steps + 1)
-
-        def scan_fn(x, t_pair):
-            t_cur, t_next = t_pair
-
-            alpha_cur, sigma_cur = self._alpha_sigma(t_cur)
-            alpha_next, sigma_next = self._alpha_sigma(t_next)
-
-            pred = self.model(t_cur, x, context)
-            eps_pred = (x - alpha_cur * pred) / jnp.maximum(sigma_cur, 1e-5)
-            x_next = alpha_next * pred + sigma_next * eps_pred
-            return x_next, x_next
-
-        t_pairs = (ts[:-1], ts[1:])
-
-        final_x, path = jax.lax.scan(scan_fn, y1, t_pairs)
-
-        if save_full:
-            return path
-        return final_x[None, ...]
-
-    @staticmethod
-    def _alpha_sigma(t):
-        alpha = jnp.exp(-0.5 * t)
-        sigma = jnp.sqrt(jnp.maximum(1.0 - jnp.exp(-t), 1e-5))
-        return alpha, sigma

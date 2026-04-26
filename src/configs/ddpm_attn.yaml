@@ -4,8 +4,9 @@ defaults:
   - feat_extract: small_no_scenes
   - transforms: null
   - logger: clearml
-  - metrics: all_metrics
-  - visual: default
+  - metrics: all_metrics #TODO Did we fix all metrics?
+  - visual: default #TODO Why default here?
+  - diffusion_sampler: ddpm
   - _self_
 trainer:
   num_epochs: 150
@@ -34,3 +35,20 @@ trainer:
     enabled: false
     step_stride: 5
     include_last: true
+
+prediction_target: x0
+t0: 1e-3
+t1: 2.0
+dt0: 0.01
+
+loss:
+  _target_: src.losses.MSELoss
+
+optimizer:
+  _target_: optax.adam
+
+scheduler:
+  _target_: optax.cosine_decay_schedule
+  init_value: 1e-3
+  decay_steps: 230
+  alpha: 0.7

@@ -3,14 +3,19 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 
-from src.models.base_model import BaseDiffusionModel
+from src.models.base_model import Basetreainer
 from src.utils.debug import (
     compute_one_step_denoise_ade,
     debug_denoiser_scale,
     debug_metric_sample,
     debug_training_shapes,
 )
-from src.utils.eval import image_log_name, log_images, mask_pred_for_plot, metric_log_name
+from src.utils.eval import (
+    image_log_name,
+    log_images,
+    mask_pred_for_plot,
+    metric_log_name,
+)
 from src.utils.eval import on_test_epoch_end as run_test_epoch_end
 from src.utils.eval import on_validation_epoch_end as run_validation_epoch_end
 from src.utils.eval import plot_vis_kwargs, to_world_frame
@@ -21,7 +26,7 @@ from src.utils.proxy import compute_proxy_batch_loss
 from src.utils.stats import batch_target_stats
 
 
-class DebuggableBaseDiffusionModel(BaseDiffusionModel):
+class DebuggableBaseDiffusionModel(Basetreainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.oracle_cfg = kwargs.get("oracle_cfg") or {}
@@ -58,7 +63,7 @@ class DebuggableBaseDiffusionModel(BaseDiffusionModel):
                     self.model,
                     self.train_key,
                     self.opt_state,
-                ) = BaseDiffusionModel.make_step(
+                ) = Basetreainer.make_step(
                     self.model,
                     self.loss_fn,
                     self.int_beta,

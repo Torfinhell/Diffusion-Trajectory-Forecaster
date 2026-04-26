@@ -1,22 +1,4 @@
-_target_: src.models.DiffusionLinearModel
-seed: ${trainer.seed}
-load_best_checkpoint: ${trainer.load_best_checkpoint}
-cfg_metrics: ${metrics}
-grad_clip: ${trainer.gradient_clip_val}
-vis_cfg: ${visual}
-trainer_cfg: ${trainer}
-prediction_target: x0
+_target_: src.models.DiffDenoiser
 hid_dim: 256
 input_shape: [32, 11, 9]
 output_shape: [32, 80, 2]
-model:
-  _target_: src.models.diff_linear.DiffDenoiser
-  hid_dim: ${model.hid_dim}
-  input_shape: ${model.input_shape}
-  output_shape: ${model.output_shape}
-loss:
-  _target_: src.losses.MSELoss
-optimizer:
-  _target_: optax.adam
-  learning_rate: 2e-3
-scheduler: null

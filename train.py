@@ -8,6 +8,7 @@ from pytorch_lightning.profilers import PyTorchProfiler
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
+from src.models.base_model import Basetreainer
 from src.utils import (
     JaxProfilerCallback,
     load_best_checkpoint,
@@ -16,7 +17,7 @@ from src.utils import (
 )
 
 
-@hydra.main(version_base=None, config_name="ddpm_1", config_path="src/configs")
+@hydra.main(version_base=None, config_name="ddpm_attn", config_path="src/configs")
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=False)
     logger = instantiate(hparams.logger)
@@ -52,9 +53,21 @@ def main(cfg) -> None:
         reload_dataloaders_every_n_epochs=cfg.trainer.generate_every_epoch,
         profiler=profiler,
     )
-    diff_model = instantiate(
-        hparams.model,
-        _recursive_=False,
+    diff_model = Basetreainer(
+        seed=hparams.trainer.seed,
+        load_best_checkpoint=hparams.trainer.load_best_checkpoint,
+        cfg_metrics=hparams.metrics,
+        vis_cfg=hparams.visual,
+        model=hparams.model,
+        loss=hparams.loss,
+        optimizer=hparams.optimizer,
+        scheduler=hparams.scheduler,
+        grad_clip=hparams.trainer.gradient_clip_val,
+        trainer_cfg=hparams.trainer,
+        prediction_target=hparams.prediction_target,
+        t0=hparams.t0,
+        t1=hparams.t1,
+        dt0=hparams.dt0,
     )
     trainer.fit(diff_model, dm)
     if load_best_checkpoint(diff_model):

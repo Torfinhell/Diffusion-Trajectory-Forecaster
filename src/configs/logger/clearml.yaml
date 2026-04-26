@@ -1,8 +1,6 @@
 _target_: src.loggers.ClearMLLogger
-project_name: "ddpm_baseline"
-task_name: "testing"
+project: "ddpm_baseline"
+task: "testing"
 save_dir: "clearml"
 mode: ${trainer.logging}
 output_uri: null
-flush_metrics_every_n_epochs: 40
-metric_buffer_max_size: 1000
