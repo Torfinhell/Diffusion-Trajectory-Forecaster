@@ -3,7 +3,7 @@ data:
   train:
     dvc_file: "data/small_base_v2_no_scenes.dvc"
     processed_path: "data/small_base_v2_no_scenes/train_small_base_v2_no_scenes.wds"
-    flush_every: 512
+    flush_every: 256
     shuffle_buffer: 256
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000"
@@ -17,7 +17,7 @@ data:
   val:
     dvc_file: "data/small_base_v2_no_scenes.dvc"
     processed_path: "data/small_base_v2_no_scenes/val_small_base_v2_no_scenes.wds"
-    flush_every: 512
+    flush_every: 256
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
       waymax_conf_version: "WOD_1_3_1_TRAINING"
@@ -31,7 +31,7 @@ data:
   test:
     dvc_file: "data/small_base_v2_no_scenes.dvc"
     processed_path: "data/small_base_v2_no_scenes/test_small_base_v2_no_scenes.wds"
-    flush_every: 512
+    flush_every: 256
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
       waymax_conf_version: "WOD_1_3_1_TRAINING"

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import webdataset as wds
 from hydra.utils import to_absolute_path
 from torch.utils.data import IterableDataset
@@ -15,7 +16,7 @@ from waymax import config, dataloader
 from src.data_module.data_process import data_process_scenarios
 
 LOGGER = logging.getLogger(__name__)
-WEBDATASET_FORMAT = "diffusion_tracker_webdataset_v1"
+WEBDATASET_FORMAT = "diffusion_tracker_webdataset_v2"
 WEBDATASET_INDEX_FILENAME = "index.json"
 DEFAULT_FLUSH_EVERY = 512
 
@@ -56,8 +57,21 @@ class Dataset:
         index_path = output_root / WEBDATASET_INDEX_FILENAME
         assert index_path.exists(), f"WebDataset index not found at {index_path}"
         loaded = json.loads(index_path.read_text(encoding="utf-8"))
-        assert  loaded.get("format") == WEBDATASET_FORMAT, f"Unsupported dataset format in {index_path}"
+        assert loaded.get("format") == WEBDATASET_FORMAT, f"Unsupported dataset format in {index_path}"
         return int(loaded.get("num_samples", 0))
+
+    @staticmethod
+    def _encode_sample_fields(index: int, sample: dict) -> dict:
+        if "scenario" in sample:
+            raise ValueError(
+                "Per-field WebDataset writing does not support raw 'scenario' payloads. "
+                "Use datasets with extract_scene=false."
+            )
+
+        encoded = {"__key__": f"{index:09d}"}
+        for key, value in sample.items():
+            encoded[f"{key}.npy"] = np.asarray(value)
+        return encoded
 
     @classmethod
     def ensure_local_webdataset(
@@ -166,12 +180,7 @@ class Dataset:
 
         with wds.ShardWriter(shard_pattern, maxcount=self.flush_every) as sink:
             for index, sample in enumerate(samples):
-                sink.write(
-                    {
-                        "__key__": f"{index:09d}",
-                        "pth": wds.torch_dumps(sample),
-                    }
-                )
+                sink.write(self._encode_sample_fields(index, sample))
                 total_samples += 1
 
         index_path = output_root / WEBDATASET_INDEX_FILENAME
@@ -225,11 +234,16 @@ class Dataset:
         return created
 
     @staticmethod
-    def _unwrap_payload(sample: dict):
-        payload = sample["pth"]
-        if isinstance(payload, dict) and "__key__" in payload:
-            payload = {key: value for key, value in payload.items() if key != "__key__"}
-        return payload
+    def _decode_sample_fields(sample: dict):
+        metadata_keys = {"__key__", "__local_path__"}
+        decoded = {}
+        for key, value in sample.items():
+            if key in metadata_keys:
+                continue
+            if not key.endswith(".npy"):
+                raise ValueError(f"Unsupported WebDataset field '{key}'")
+            decoded[key[:-4]] = value
+        return decoded
 
     @classmethod
     def build_webdataset(cls, split: str, split_cfg, is_train: bool):
@@ -260,5 +274,5 @@ class Dataset:
         if is_train:
             dataset = dataset.shuffle(int(split_cfg.get("shuffle_buffer", 1000)))
 
-        dataset = dataset.map(cls._unwrap_payload)
+        dataset = dataset.map(cls._decode_sample_fields)
         return SizedIterableDataset(dataset, int(metadata.get("num_samples", 0)))
