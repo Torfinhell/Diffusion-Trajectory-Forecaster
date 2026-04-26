@@ -253,6 +253,8 @@ class Dataset:
         dataset = wds.WebDataset(
             [str(path) for path in shard_paths],
             shardshuffle=len(shard_paths) if is_train else False,
+            nodesplitter=wds.split_by_node,
+            workersplitter=wds.split_by_worker,
         ).decode()
 
         if is_train:
