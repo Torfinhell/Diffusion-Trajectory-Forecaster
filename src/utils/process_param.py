@@ -29,7 +29,14 @@ def process_hparams(hparams, print_hparams=True):
     return hparams
 
 
-def _read_dvc_metadata(dvc_file: str) -> dict:
+def _read_dvc_metadata(dvc_file: str | None) -> dict:
+    if dvc_file is None:
+        return {
+            "path": None,
+            "absolute_path": None,
+            "exists": False,
+        }
+
     dvc_path = Path(to_absolute_path(dvc_file))
     metadata = {
         "path": dvc_file,
@@ -48,11 +55,12 @@ def _read_dvc_metadata(dvc_file: str) -> dict:
 def _dataset_metadata(cfg) -> dict:
     metadata = {}
     for split, split_cfg in cfg.data.items():
+        dvc_file = split_cfg.get("dvc_file")
         split_info = {
             "processed_path": split_cfg.processed_path,
             "processed_path_abs": to_absolute_path(split_cfg.processed_path),
-            "dvc_file": split_cfg.dvc_file,
-            "dvc": _read_dvc_metadata(split_cfg.dvc_file),
+            "dvc_file": dvc_file,
+            "dvc": _read_dvc_metadata(dvc_file),
         }
         metadata[split] = split_info
     return metadata

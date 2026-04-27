@@ -198,6 +198,29 @@ uv run python train.py \
   data.test.storage_format=webdataset
 ```
 
+Train from S3-hosted WebDataset shards:
+```bash
+uv run python train.py \
+  feat_extract=small_no_scenes_s3
+```
+To use online training AWS cli is required:
+```bash
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+```
+To provide credentials run
+``` bash
+aws configure
+```
+It asks next values:
+AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+
+Remote WebDataset notes:
+- if `processed_path` starts with `s3://`, the dataset is treated as remote
+- during creation, shards are written to `local_cache_path`, uploaded to S3, and removed locally
+- during training, shards are streamed from S3 with `aws s3 cp`
+
 How the training path is selected:
 - `src/configs/data/*.yaml` contains `storage_format` for each split
 - if `storage_format=webdataset`, training uses the WebDataset loader

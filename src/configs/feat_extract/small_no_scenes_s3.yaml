@@ -1,24 +1,24 @@
 # @package _global_
 data:
   train:
-    dvc_file: "data/small_base_v2_no_scenes.dvc"
-    processed_path: "data/small_base_v2_no_scenes/train_small_base_v2_no_scenes.wds"
-    local_cache_path: null
+    dvc_file: null
+    processed_path: "s3://sub-waymo-235229002129-eu-north-1-an/datasets/small_no_scenes/train.wds"
+    local_cache_path: "/tmp/diffusion-cache/small_no_scenes/train.wds"
     flush_every: 256
     shuffle_buffer: 256
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000"
       waymax_conf_version: "WOD_1_3_1_TRAINING"
-      num_states: 2000
+      num_states: 100
       max_num_objects: 32
       extract_scene: false
       preprocessing:
         current_index: 10
         use_full_agent_info: true
   val:
-    dvc_file: "data/small_base_v2_no_scenes.dvc"
-    processed_path: "data/small_base_v2_no_scenes/val_small_base_v2_no_scenes.wds"
-    local_cache_path: null
+    dvc_file: null
+    processed_path: "s3://sub-waymo-235229002129-eu-north-1-an/datasets/small_no_scenes/val.wds"
+    local_cache_path: "/tmp/diffusion-cache/small_no_scenes/val.wds"
     flush_every: 256
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
@@ -31,9 +31,9 @@ data:
         current_index: 10
         use_full_agent_info: true
   test:
-    dvc_file: "data/small_base_v2_no_scenes.dvc"
-    processed_path: "data/small_base_v2_no_scenes/test_small_base_v2_no_scenes.wds"
-    local_cache_path: null
+    dvc_file: null
+    processed_path: "s3://sub-waymo-235229002129-eu-north-1-an/datasets/small_no_scenes/test.wds"
+    local_cache_path: "/tmp/diffusion-cache/small_no_scenes/test.wds"
     flush_every: 256
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"

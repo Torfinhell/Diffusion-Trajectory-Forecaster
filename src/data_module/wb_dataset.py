@@ -3,6 +3,7 @@ import json
 import logging
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 import jax
 import jax.numpy as jnp
@@ -19,6 +20,49 @@ LOGGER = logging.getLogger(__name__)
 WEBDATASET_FORMAT = "diffusion_tracker_webdataset_v2"
 WEBDATASET_INDEX_FILENAME = "index.json"
 DEFAULT_FLUSH_EVERY = 512
+DEFAULT_REMOTE_STREAM_COMMAND = "aws s3 cp {url} -"
+
+
+def _is_s3_url(value: str | None) -> bool:
+    if value is None:
+        return False
+    return str(value).startswith("s3://")
+
+
+def _split_s3_url(url: str) -> tuple[str, str]:
+    parsed = urlparse(str(url).rstrip("/"))
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"Unsupported S3 url: {url}")
+    return parsed.netloc, parsed.path.lstrip("/").rstrip("/")
+
+
+def _s3_join(root_url: str, name: str) -> str:
+    return f"{str(root_url).rstrip('/')}/{str(name).lstrip('/')}"
+
+
+def _s3_client():
+    import boto3
+
+    return boto3.client("s3")
+
+
+def _s3_upload_file(root_url: str, local_path: Path, name: str) -> None:
+    bucket, prefix = _split_s3_url(root_url)
+    key = f"{prefix}/{name}" if prefix else name
+    _s3_client().upload_file(str(local_path), bucket, key)
+
+
+def _s3_write_text(root_url: str, name: str, text: str) -> None:
+    bucket, prefix = _split_s3_url(root_url)
+    key = f"{prefix}/{name}" if prefix else name
+    _s3_client().put_object(Bucket=bucket, Key=key, Body=text.encode("utf-8"))
+
+
+def _s3_read_text(root_url: str, name: str) -> str:
+    bucket, prefix = _split_s3_url(root_url)
+    key = f"{prefix}/{name}" if prefix else name
+    body = _s3_client().get_object(Bucket=bucket, Key=key)["Body"]
+    return body.read().decode("utf-8")
 
 
 class SizedIterableDataset(IterableDataset):
@@ -37,6 +81,20 @@ class SizedIterableDataset(IterableDataset):
 class Dataset:
     def __init__(self, flush_every: int = DEFAULT_FLUSH_EVERY):
         self.flush_every = int(flush_every)
+
+    @classmethod
+    def _resolve_local_output_root(cls, split_cfg) -> Path:
+        processed_path = str(split_cfg.processed_path)
+        if not _is_s3_url(processed_path):
+            return Path(to_absolute_path(processed_path))
+
+        local_cache_path = split_cfg.get("local_cache_path")
+        if local_cache_path:
+            return Path(to_absolute_path(str(local_cache_path)))
+
+        parsed = urlparse(processed_path)
+        artifact_suffix = parsed.path.lstrip("/")
+        return Path("/tmp/remote_cache") / parsed.netloc / artifact_suffix
 
     @staticmethod
     def _strip_leading_batch_axis(sample):
@@ -61,6 +119,11 @@ class Dataset:
         return int(loaded.get("num_samples", 0))
 
     @staticmethod
+    def _read_num_samples_from_metadata(metadata: dict) -> int:
+        assert metadata.get("format") == WEBDATASET_FORMAT, "Unsupported WebDataset format"
+        return int(metadata.get("num_samples", 0))
+
+    @staticmethod
     def _encode_sample_fields(index: int, sample: dict) -> dict:
         if "scenario" in sample:
             raise ValueError(
@@ -78,11 +141,10 @@ class Dataset:
         cls,
         split: str,
         split_cfg,
-        processed_path: str,
         creation_cfg=None,
         flush_every: int = DEFAULT_FLUSH_EVERY,
     ) -> Path:
-        output_root = Path(to_absolute_path(processed_path))
+        output_root = cls._resolve_local_output_root(split_cfg)
         index_path = output_root / WEBDATASET_INDEX_FILENAME
         if index_path.exists():
             return output_root
@@ -168,7 +230,12 @@ class Dataset:
             if produced >= int(num_states):
                 break
 
-    def save_processed_samples(self, processed_path, samples):
+    def save_processed_samples(
+        self,
+        processed_path,
+        samples,
+        s3_path: str | None = None,
+    ):
         assert self.flush_every > 0, "flush_every must be a positive integer"
         output_root = Path(processed_path)
         output_root.parent.mkdir(parents=True, exist_ok=True)
@@ -177,8 +244,29 @@ class Dataset:
         output_root.mkdir(parents=True, exist_ok=True)
         shard_pattern = str(output_root / "shard-%06d.tar")
         total_samples = 0
+        num_shards = 0
 
-        with wds.ShardWriter(shard_pattern, maxcount=self.flush_every) as sink:
+        def upload_shard(shard_path_str: str) -> None:
+            nonlocal num_shards
+            num_shards += 1
+            if s3_path is None:
+                return
+
+            shard_path = Path(shard_path_str)
+            LOGGER.info(
+                "Uploading shard %s to %s",
+                shard_path.name,
+                _s3_join(s3_path, shard_path.name),
+            )
+            _s3_upload_file(s3_path, shard_path, shard_path.name)
+            shard_path.unlink(missing_ok=True)
+
+        with wds.ShardWriter(
+            shard_pattern,
+            maxcount=self.flush_every,
+            post=upload_shard,
+            verbose=0,
+        ) as sink:
             for index, sample in enumerate(samples):
                 sink.write(self._encode_sample_fields(index, sample))
                 total_samples += 1
@@ -187,16 +275,21 @@ class Dataset:
         metadata = {
             "format": WEBDATASET_FORMAT,
             "num_samples": total_samples,
-            "num_shards": len(list(output_root.glob("shard-*.tar"))),
+            "num_shards": num_shards,
             "shard_glob": "shard-*.tar",
+            "shard_pattern": "shard-%06d.tar",
         }
-        index_path.write_text(
-            json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        metadata_text = json.dumps(metadata, indent=2, sort_keys=True)
+        index_path.write_text(metadata_text, encoding="utf-8")
+        if s3_path is not None:
+            _s3_write_text(s3_path, WEBDATASET_INDEX_FILENAME, metadata_text)
+            shutil.rmtree(output_root, ignore_errors=True)
         return output_root
 
     def create_split(self, split: str, artifact_cfg, creation_cfg) -> Path:
-        processed_path = Path(to_absolute_path(artifact_cfg.processed_path))
+        processed_path = self._resolve_local_output_root(artifact_cfg)
+        s3_path = str(artifact_cfg.processed_path) if _is_s3_url(artifact_cfg.processed_path) else None
+
         LOGGER.info("Creating %s split from raw data", split)
         samples = self.iter_processed_samples(
             raw_data_url=creation_cfg.raw_data_url,
@@ -214,8 +307,24 @@ class Dataset:
             processed_path,
             self.flush_every,
         )
-        output_root = Path(self.save_processed_samples(processed_path, samples))
-        num_samples = self._read_num_samples(output_root)
+        output_root = Path(
+            self.save_processed_samples(
+                processed_path=processed_path,
+                samples=samples,
+                s3_path=s3_path,
+            )
+        )
+        if s3_path is not None:
+            LOGGER.info(
+                "Uploaded %s split to %s",
+                split,
+                s3_path,
+            )
+        if s3_path is not None:
+            metadata = json.loads(_s3_read_text(s3_path, WEBDATASET_INDEX_FILENAME))
+            num_samples = self._read_num_samples_from_metadata(metadata)
+        else:
+            num_samples = self._read_num_samples(output_root)
         if num_samples <= 0:
             raise RuntimeError(
                 f"Created empty {split} dataset at {output_root}. "
@@ -246,27 +355,84 @@ class Dataset:
         return decoded
 
     @classmethod
-    def build_webdataset(cls, split: str, split_cfg, is_train: bool):
-        output_root = cls.ensure_local_webdataset(
-            split=split,
-            split_cfg=split_cfg,
-            processed_path=split_cfg.processed_path,
-            creation_cfg=split_cfg.get("creation"),
-        )
-        index_path = output_root / WEBDATASET_INDEX_FILENAME
-        metadata = json.loads(index_path.read_text(encoding="utf-8"))
-        if metadata.get("format") != WEBDATASET_FORMAT:
-            raise RuntimeError(f"Unsupported WebDataset format in {index_path}.")
+    def _build_remote_shard_sources(cls, s3_path: str, metadata: dict):
+        shard_pattern = str(metadata.get("shard_pattern", "shard-%06d.tar"))
+        num_shards = int(metadata.get("num_shards", 0))
+        shard_sources = []
+        for shard_idx in range(num_shards):
+            shard_name = shard_pattern % shard_idx
+            shard_sources.append(
+                "pipe:" + DEFAULT_REMOTE_STREAM_COMMAND.format(
+                    url=_s3_join(s3_path, shard_name),
+                )
+            )
+        return shard_sources
 
-        shard_paths = sorted(
-            output_root.glob(metadata.get("shard_glob", "shard-*.tar"))
-        )
-        if not shard_paths:
-            raise FileNotFoundError(f"No WebDataset shards found under {output_root}.")
+    @classmethod
+    def _read_remote_metadata(cls, split: str, split_cfg):
+        s3_path = str(split_cfg.processed_path)
+        try:
+            metadata = json.loads(_s3_read_text(s3_path, WEBDATASET_INDEX_FILENAME))
+        except Exception:
+            creation_cfg = split_cfg.get("creation")
+            if creation_cfg is None:
+                raise FileNotFoundError(
+                    f"Remote WebDataset index not found at "
+                    f"{_s3_join(s3_path, WEBDATASET_INDEX_FILENAME)}."
+                )
+            LOGGER.info(
+                "Remote WebDataset not found at %s. Creating %s split.",
+                s3_path,
+                split,
+            )
+            builder = cls(flush_every=int(split_cfg.get("flush_every", DEFAULT_FLUSH_EVERY)))
+            builder.create_split(
+                split=split,
+                artifact_cfg=split_cfg,
+                creation_cfg=creation_cfg,
+            )
+            metadata = json.loads(_s3_read_text(s3_path, WEBDATASET_INDEX_FILENAME))
+
+        if metadata.get("format") != WEBDATASET_FORMAT:
+            raise RuntimeError(
+                f"Unsupported WebDataset format in "
+                f"{_s3_join(s3_path, WEBDATASET_INDEX_FILENAME)}."
+            )
+        return metadata
+
+    @classmethod
+    def build_webdataset(cls, split: str, split_cfg, is_train: bool):
+        if _is_s3_url(split_cfg.processed_path):
+            s3_path = str(split_cfg.processed_path)
+            metadata = cls._read_remote_metadata(split, split_cfg)
+            shard_sources = cls._build_remote_shard_sources(s3_path, metadata)
+            if not shard_sources:
+                raise FileNotFoundError(
+                    f"No WebDataset shards found under {s3_path}."
+                )
+        else:
+            output_root = cls.ensure_local_webdataset(
+                split=split,
+                split_cfg=split_cfg,
+                creation_cfg=split_cfg.get("creation"),
+            )
+            index_path = output_root / WEBDATASET_INDEX_FILENAME
+            metadata = json.loads(index_path.read_text(encoding="utf-8"))
+            if metadata.get("format") != WEBDATASET_FORMAT:
+                raise RuntimeError(f"Unsupported WebDataset format in {index_path}.")
+
+            shard_paths = sorted(
+                output_root.glob(metadata.get("shard_glob", "shard-*.tar"))
+            )
+            if not shard_paths:
+                raise FileNotFoundError(
+                    f"No WebDataset shards found under {output_root}."
+                )
+            shard_sources = [str(path) for path in shard_paths]
 
         dataset = wds.WebDataset(
-            [str(path) for path in shard_paths],
-            shardshuffle=len(shard_paths) if is_train else False,
+            shard_sources,
+            shardshuffle=len(shard_sources) if is_train else False,
             nodesplitter=wds.split_by_node,
             workersplitter=wds.split_by_worker,
         ).decode()
