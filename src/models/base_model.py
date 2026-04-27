@@ -1,8 +1,6 @@
 from functools import partial
 from pathlib import Path
 
-from torchgen import model
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -58,25 +56,18 @@ class Basetreainer(L.LightningModule):
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
         self.metrics_test = MetricCollection([instantiate(m) for m in self.metrics.val])
-        self.train_loss_tracker = MetricTracker("train_loss")
-        self.val_loss_tracker = MetricTracker("val_loss", "val_proxy_loss")
-        self.val_metric_batches = int(self.trainer_cfg.get("val_metric_batches", 3))
-        self._val_batches_for_metrics = []
-        self.train_metric_batches = int(self.trainer_cfg.get("train_metric_batches", 3))
-        self._train_batches_for_metrics = []
-
-        self.prediction_target = str(prediction_target).lower()
-        if self.prediction_target not in {"x0", "epsilon", "score"}:
-            raise ValueError(
-                f"Unsupported prediction_target '{prediction_target}'. "
-                "Use one of: x0, epsilon, score."
-            )
-        self.int_beta = lambda t: t
-        self.t0 = float(t0)
-        self.t1 = float(t1)
-        self.dt0 = float(dt0)
-        self.weight = lambda t: 1 - jnp.exp(-self.int_beta(t))
-
+        # self.prediction_target = str(prediction_target).lower()
+        # if self.prediction_target not in {"x0", "epsilon", "score"}:
+        #     raise ValueError(
+        #         f"Unsupported prediction_target '{prediction_target}'. "
+        #         "Use one of: x0, epsilon, score."
+        #     )
+        # self.int_beta = lambda t: t
+        # self.t0 = float(t0)
+        # self.t1 = float(t1)
+        # self.dt0 = float(dt0)
+        # self.weight = lambda t: 1 - jnp.exp(-self.int_beta(t))
+        # TODO uncomment for now but later need to use diffusion sampler
         self.model = instantiate(model, key=key_model)
         self.loss_fn = instantiate(loss)
         self.learning_rate_schedule = (
@@ -101,77 +92,52 @@ class Basetreainer(L.LightningModule):
         return []
 
     def training_step(self, batch):
-        step_out = Basetreainer.make_train_step(
-            model=self.model,
-            loss_fn=self.loss_fn,
-            int_beta=self.int_beta,
-            batch=batch,
-            timesteps=self.t1,
-            key=self.train_key,
-            opt_state=self.opt_state,
-            opt_update=self.optim.update,
-        )
-        self.model = step_out["model"]
-        self.train_key = step_out["key"]
-        self.opt_state = step_out["opt_state"]
-        self.train_loss_tracker.update("train_loss", jnp.asarray(step_out["loss"]))
-        log_metrics = self._log_step_metrics(
-            "train",
-            step_out["loss"],
-            step_out["train_stats"],
-            grad_norm=step_out["grad_norm"],
-            update_norm=step_out["update_norm"],
-            param_norm=step_out["param_norm"],
-        )
-        self.log_dict(
-            log_metrics,
-            prog_bar=False,
-            on_step=True,
-            on_epoch=False,
-        )
-        self.global_step_ += 1
-        return None
+        return self._step(batch, "train")
 
     def validation_step(self, batch):
-        self.loader_key, val_key = jr.split(self.loader_key)
-        step_out = self.make_eval_step(
-            model=self.model,
-            loss_fn=self.loss_fn,
-            int_beta=self.int_beta,
-            batch=batch,
-            timesteps=self.t1,
-            key=val_key,
-        )
-        self.loader_key = step_out["key"]
-        self.val_loss_tracker.update("val_loss", jnp.asarray(step_out["loss"]))
-        log_metrics = self._log_step_metrics(
-            "val",
-            step_out["loss"],
-            step_out["train_stats"],
-        )
-        self.log_dict(
-            log_metrics,
-            prog_bar=False,
-            on_step=True,
-            on_epoch=False,
-        )
+        return self._step(batch, "val")
 
     def test_step(self, batch):
-        self.loader_key, test_key = jr.split(self.loader_key)
-        step_out = self.make_eval_step(
+        return self._step(batch, "test")
+
+    def _step(self, batch, kind):
+        is_train = kind == "train"
+        if is_train:
+            step_key, self.train_key = jr.split(self.train_key)
+        else:
+            step_key, self.loader_key = jr.split(self.loader_key)
+
+        step_out = self.make_step(
             model=self.model,
             loss_fn=self.loss_fn,
             int_beta=self.int_beta,
             batch=batch,
             timesteps=self.t1,
-            key=test_key,
+            key=step_key,
+            train=is_train,
+            opt_state=self.opt_state if is_train else None,
+            opt_update=self.optim.update if is_train else None,
         )
-        self.loader_key = step_out["key"]
-        log_metrics = self._log_step_metrics(
-            "test",
-            step_out["loss"],
-            step_out["train_stats"],
-        )
+
+        if is_train:
+            self.model = step_out["model"]
+            self.opt_state = step_out["opt_state"]
+
+        log_metrics = {f"{kind}/loss_step": float(jnp.asarray(step_out["loss"]))}
+        if step_out.get("grad_norm") is not None:
+            log_metrics[f"{kind}/grad_norm"] = float(jnp.asarray(step_out["grad_norm"]))
+        if step_out.get("update_norm") is not None:
+            log_metrics[f"{kind}/update_norm"] = float(
+                jnp.asarray(step_out["update_norm"])
+            )
+        if step_out.get("param_norm") is not None:
+            log_metrics[f"{kind}/param_norm"] = float(
+                jnp.asarray(step_out["param_norm"])
+            )
+        if step_out["train_stats"] is not None:
+            for stat_key, stat_value in step_out["train_stats"].items():
+                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
+
         self.log_dict(
             log_metrics,
             prog_bar=False,
@@ -179,82 +145,44 @@ class Basetreainer(L.LightningModule):
             on_epoch=False,
         )
 
-    @classmethod
-    def _log_step_metrics(
-        cls,
-        kind,
-        loss,
-        train_stats,
-        grad_norm=None,
-        update_norm=None,
-        param_norm=None,
-    ):
-        log_metrics = {f"{kind}/loss_step": float(jnp.asarray(loss))}
-        if grad_norm is not None:
-            log_metrics[f"{kind}/grad_norm"] = float(jnp.asarray(grad_norm))
-        if update_norm is not None:
-            log_metrics[f"{kind}/update_norm"] =float(jnp.asarray(update_norm))
-        if param_norm is not None:
-            log_metrics[f"{kind}/param_norm"] = float(jnp.asarray(param_norm))
-        if train_stats is not None:
-            for stat_key, stat_value in train_stats.items():
-                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
-        return log_metrics
+        if is_train:
+            self.global_step_ += 1
+
+        return step_out["loss"]
 
     @staticmethod
     @eqx.filter_jit
-    def make_train_step(
+    def make_step(
         model,
         loss_fn,
         int_beta,
         batch,
         timesteps,
         key,
+        train,
         opt_state=None,
         opt_update=None,
     ):
-        grad_fn = eqx.filter_value_and_grad(
-            Basetreainer.batch_loss_fn, has_aux=True
-        )
-        (loss, train_stats), grads = grad_fn(
-            model, loss_fn, int_beta, batch, timesteps, key
-        )
-        grad_norm = optax.global_norm(grads)
-        updates, opt_state = opt_update(grads, opt_state)
-        update_norm = optax.global_norm(updates)
-        model = eqx.apply_updates(model, updates)
-        param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
+        if train:
+            grad_fn = eqx.filter_value_and_grad(
+                Basetreainer.batch_loss_fn, has_aux=True
+            )
+            (loss, train_stats), grads = grad_fn(
+                model, loss_fn, int_beta, batch, timesteps, key
+            )
+            grad_norm = optax.global_norm(grads)
+            updates, opt_state = opt_update(grads, opt_state)
+            update_norm = optax.global_norm(updates)
+            model = eqx.apply_updates(model, updates)
+            param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
+        else:
+            loss, train_stats = Basetreainer.batch_loss_fn(
+                model, loss_fn, int_beta, batch, timesteps, key
+            )
+            grad_norm = None
+            update_norm = None
+            param_norm = None
 
-        key = jr.split(key, 1)[0]
-        return {
-            "loss": loss,
-            "train_stats": train_stats,
-            "grad_norm": grad_norm,
-            "update_norm": update_norm,
-            "param_norm": param_norm,
-            "model": model,
-            "key": key,
-            "opt_state": opt_state,
-        }
-    
-    @staticmethod
-    @eqx.filter_jit
-    def make_eval_step(
-        model,
-        loss_fn,
-        int_beta,
-        batch,
-        timesteps,
-        key,
-        opt_state=None,
-        opt_update=None,
-    ):
-        loss, train_stats = Basetreainer.batch_loss_fn(
-            model, loss_fn, int_beta, batch, timesteps, key
-        )
-        grad_norm = None
-        update_norm = None
-        param_norm = None
         key = jr.split(key, 1)[0]
         return {
             "loss": loss,
@@ -281,27 +209,3 @@ class Basetreainer(L.LightningModule):
             lambda value: jnp.mean(value, axis=0), stats
         )
         return jnp.mean(losses), mean_stats
-
-    # def sample_multiple_sol(
-    #     self,
-    #     context,
-    #     num_solutions=1,
-    #     predict_shape=None,
-    #     save_full=False,
-    #     oracle_gt_xy=None,
-    # ):
-    #     del oracle_gt_xy
-    #     self.sample_key, key = jr.split(self.sample_key)
-    #     sample_keys = jr.split(key, num_solutions)
-    #     sample_one = lambda kk: self.sample_one_sol(
-    #         self.model,
-    #         self.int_beta,
-    #         predict_shape,
-    #         self.dt0,
-    #         self.t1,
-    #         context,
-    #         save_full,
-    #         kk,
-    #     )[0]
-    #     pred_samples = jax.vmap(sample_one)(sample_keys)
-    #     return jnp.mean(pred_samples, axis=0) TODO
