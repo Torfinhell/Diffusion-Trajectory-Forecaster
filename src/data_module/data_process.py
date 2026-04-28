@@ -39,35 +39,6 @@ def filter_topk_roadgraph_points(roadgraph, reference_points, topk):
     else:
         return roadgraph.ids
 
-
-@jax.jit(static_argnames=["topk"])
-def filter_topk_roadgraph_ids(roadgraph, reference_points, topk):
-    """Returns ids of the topk closest valid roadgraph points."""
-    num_points = roadgraph.x.shape[-1]
-    if topk > num_points:
-        raise NotImplementedError("Not enough points in roadgraph.")
-
-    if topk < num_points:
-        ref_x = reference_points[..., 0][..., None]
-        ref_y = reference_points[..., 1][..., None]
-        roadgraph_x = jnp.broadcast_to(roadgraph.x, ref_x.shape[:-1] + (num_points,))
-        roadgraph_y = jnp.broadcast_to(roadgraph.y, ref_y.shape[:-1] + (num_points,))
-        roadgraph_valid = jnp.broadcast_to(
-            roadgraph.valid, ref_x.shape[:-1] + (num_points,)
-        )
-        roadgraph_ids = jnp.broadcast_to(
-            roadgraph.ids, ref_x.shape[:-1] + (num_points,)
-        )
-        dx = roadgraph_x - ref_x
-        dy = roadgraph_y - ref_y
-        dist = dx * dx + dy * dy
-        valid_dist = jnp.where(roadgraph_valid, dist, jnp.inf)
-        top_idx = jnp.argpartition(valid_dist, topk - 1, axis=-1)[..., :topk]
-        return jnp.take_along_axis(roadgraph_ids, top_idx, axis=-1)
-
-    return roadgraph.ids
-
-
 @jax.jit(static_argnames=["current_index"])
 def data_process_traffic_light(scenarios, current_index=10):
     traffic_lights = scenarios.log_traffic_light
