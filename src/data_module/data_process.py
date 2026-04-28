@@ -29,25 +29,43 @@ def filter_topk_roadgraph_points(roadgraph, reference_points, topk):
         roadgraph_xy = roadgraph.xy
         dist = jnp.sum((reference_points[..., None, :] - roadgraph_xy) ** 2, axis=-1)
         valid_dist = jnp.where(roadgraph.valid, dist, jnp.inf)
-        top_idx = jnp.argpartition(valid_dist, topk, axis=-1)[..., :topk]
+        top_idx = jnp.argpartition(valid_dist, topk-1, axis=-1)[..., :topk]
 
-        def take(field):
-            return jnp.take_along_axis(field, top_idx, axis=-1)
-
-        return datatypes.RoadgraphPoints(
-            x=take(roadgraph.x),
-            y=take(roadgraph.y),
-            z=take(roadgraph.z),
-            dir_x=take(roadgraph.dir_x),
-            dir_y=take(roadgraph.dir_y),
-            dir_z=take(roadgraph.dir_z),
-            types=take(roadgraph.types),
-            ids=take(roadgraph.ids),
-            valid=take(roadgraph.valid),
+        roadgraph_ids = jnp.broadcast_to(
+        roadgraph.ids, top_idx.shape[:-1] + (roadgraph.ids.shape[-1],)
         )
+        return jnp.take_along_axis(roadgraph_ids, top_idx, axis=-1)
 
     else:
-        return roadgraph
+        return roadgraph.ids
+
+
+@jax.jit(static_argnames=["topk"])
+def filter_topk_roadgraph_ids(roadgraph, reference_points, topk):
+    """Returns ids of the topk closest valid roadgraph points."""
+    num_points = roadgraph.x.shape[-1]
+    if topk > num_points:
+        raise NotImplementedError("Not enough points in roadgraph.")
+
+    if topk < num_points:
+        ref_x = reference_points[..., 0][..., None]
+        ref_y = reference_points[..., 1][..., None]
+        roadgraph_x = jnp.broadcast_to(roadgraph.x, ref_x.shape[:-1] + (num_points,))
+        roadgraph_y = jnp.broadcast_to(roadgraph.y, ref_y.shape[:-1] + (num_points,))
+        roadgraph_valid = jnp.broadcast_to(
+            roadgraph.valid, ref_x.shape[:-1] + (num_points,)
+        )
+        roadgraph_ids = jnp.broadcast_to(
+            roadgraph.ids, ref_x.shape[:-1] + (num_points,)
+        )
+        dx = roadgraph_x - ref_x
+        dy = roadgraph_y - ref_y
+        dist = dx * dx + dy * dy
+        valid_dist = jnp.where(roadgraph_valid, dist, jnp.inf)
+        top_idx = jnp.argpartition(valid_dist, topk - 1, axis=-1)[..., :topk]
+        return jnp.take_along_axis(roadgraph_ids, top_idx, axis=-1)
+
+    return roadgraph.ids
 
 
 @jax.jit(static_argnames=["current_index"])
@@ -149,32 +167,31 @@ def data_process_map(
     agents_coeffs = agents_info["agents_coeffs"]
     agent_past = agents_info["agent_past"]
     current_valid = agents_coeffs > 0
-    map_ids = []
+    agent_positions = agent_past[:, -1, :2]
+    map_ids = filter_topk_roadgraph_points(roadgraph_points, agent_positions, 1000)
+    map_ids = jnp.where(current_valid[:, None], map_ids, -1)
 
-    for a in range(agent_past.shape[0]):
-        agent_position = agent_past[a, -1, :2]
-        nearby_roadgraph_points = filter_topk_roadgraph_points(
-            roadgraph_points, agent_position, 3000
+    ordered_map_ids = map_ids.T.reshape(-1)
+    initial_sorted_map_ids = jnp.full((max_polylines,), -1, dtype=map_ids.dtype)
+
+    def collect_unique_ids(carry, cur_id):
+        sorted_map_ids, insert_count = carry
+        already_seen = jnp.any(sorted_map_ids == cur_id)
+        can_insert = (cur_id != -1) & (~already_seen) & (insert_count < max_polylines)
+        sorted_map_ids = jax.lax.cond(
+            can_insert,
+            lambda arr: arr.at[insert_count].set(cur_id),
+            lambda arr: arr,
+            sorted_map_ids,
         )
-        agent_ids = jnp.where(current_valid[a], nearby_roadgraph_points.ids, -1)
-        map_ids.append(agent_ids)
+        insert_count = insert_count + can_insert.astype(jnp.int32)
+        return (sorted_map_ids, insert_count), None
 
-    map_ids = jnp.stack(map_ids, axis=0)
-
-    sorted_map_ids = jnp.full((max_polylines,), -1, dtype=map_ids.dtype)
-    insert_count = jnp.int32(0)
-    for i in range(map_ids.shape[1]):
-        for j in range(map_ids.shape[0]):
-            cur_id = map_ids[j, i]
-            already_seen = jnp.any(sorted_map_ids == cur_id)
-            can_insert = (cur_id != -1) & (~already_seen) & (insert_count < max_polylines)
-            sorted_map_ids = jax.lax.cond(
-                can_insert,
-                lambda arr: arr.at[insert_count].set(cur_id),
-                lambda arr: arr,
-                sorted_map_ids,
-            )
-            insert_count = insert_count + can_insert.astype(jnp.int32)
+    (sorted_map_ids, _), _ = jax.lax.scan(
+        collect_unique_ids,
+        (initial_sorted_map_ids, jnp.int32(0)),
+        ordered_map_ids,
+    )
 
     roadgraph_points_x = roadgraph_points.x
     roadgraph_points_y = roadgraph_points.y
@@ -182,30 +199,35 @@ def data_process_map(
     roadgraph_points_dir_y = roadgraph_points.dir_y
     roadgraph_points_types = roadgraph_points.types
     roadgraph_heading = jnp.arctan2(roadgraph_points_dir_y, roadgraph_points_dir_x)
+    base_features = jnp.stack(
+        [
+            roadgraph_points_x,
+            roadgraph_points_y,
+            roadgraph_heading,
+        ],
+        axis=1,
+    )
 
-    polylines = []
-    polylines_valid = []
-
-    for idx in range(sorted_map_ids.shape[0]):
-        id = sorted_map_ids[idx]
+    def build_polyline(id):
         point_mask = (roadgraph_points.ids == id) & roadgraph_points.valid
         lane_type = jnp.where(point_mask, roadgraph_points_types, 0)
         traffic_light_state = jnp.max(
             jnp.where(traffic_lane_ids == id, traffic_light_states, 0)
         )
-        traffic_light_column = jnp.full_like(roadgraph_points_x, traffic_light_state, dtype=jnp.float32)
-
-        polyline = jnp.stack(
+        traffic_light_column = jnp.full_like(
+            roadgraph_points_x, traffic_light_state, dtype=jnp.float32
+        )
+        polyline = jnp.concatenate(
             [
-                roadgraph_points_x,
-                roadgraph_points_y,
-                roadgraph_heading,
-                traffic_light_column,
-                lane_type.astype(jnp.float32),
+                base_features,
+                traffic_light_column[:, None],
+                lane_type.astype(jnp.float32)[:, None],
             ],
             axis=1,
         )
+        # [num_points, 5]
 
+        #moving valid points to the front
         sort_key = jnp.where(point_mask, 0, 1)
         order = jnp.argsort(sort_key, stable=True)
         polyline = jnp.take(polyline, order, axis=0)
@@ -218,12 +240,9 @@ def data_process_map(
         cur_polyline = jnp.take(polyline, sampled_points, axis=0)
         cur_valid = ((id != -1) & (polyline_len > 0)).astype(jnp.int32)
         cur_polyline = jnp.where(cur_valid > 0, cur_polyline, 0.0)
+        return cur_polyline, cur_valid
 
-        polylines.append(cur_polyline)
-        polylines_valid.append(cur_valid)
-
-    polylines = jnp.stack(polylines, axis=0)
-    polylines_valid = jnp.stack(polylines_valid, axis=0)
+    polylines, polylines_valid = jax.lax.map(build_polyline, sorted_map_ids)
 
     return {
         "polylines": polylines,
@@ -254,15 +273,15 @@ def data_process_scenarios(
     agents_info = data_process_agent(
         scenarios, current_index=current_index, use_full_agent_info=use_full_agent_info
     )
-    # map_info = data_process_map(
-    #     scenarios,
-    #     traffic_info,
-    #     agents_info,
-    #     max_polylines=max_polylines,
-    #     num_points_polyline=num_points_polyline,
-    # )
+    map_info = data_process_map(
+        scenarios,
+        traffic_info,
+        agents_info,
+        max_polylines=max_polylines,
+        num_points_polyline=num_points_polyline,
+    )
     data_dict = {}
     data_dict.update(traffic_info)
     data_dict.update(agents_info)
-    #data_dict.update(map_info)
+    data_dict.update(map_info)
     return data_dict
