@@ -97,20 +97,6 @@ class Dataset:
         return Path("/tmp/remote_cache") / parsed.netloc / artifact_suffix
 
     @staticmethod
-    def _strip_leading_batch_axis(sample):
-        cleaned = {}
-        for key, value in sample.items():
-            if key == "scenario":
-                cleaned[key] = value
-                continue
-            arr = jnp.asarray(value)
-            if arr.ndim > 0 and arr.shape[0] == 1:
-                cleaned[key] = jnp.squeeze(arr, axis=0)
-            else:
-                cleaned[key] = value
-        return cleaned
-
-    @staticmethod
     def _read_num_samples(output_root: Path) -> int:
         index_path = output_root / WEBDATASET_INDEX_FILENAME
         assert index_path.exists(), f"WebDataset index not found at {index_path}"
@@ -219,10 +205,7 @@ class Dataset:
             if index < start_index:
                 continue
 
-            batched_scenario = jax.tree_util.tree_map(lambda x: x[None, ...], state)
-            processed = self._strip_leading_batch_axis(
-                data_process_scenarios(batched_scenario, **preprocess_kwargs)
-            )
+            processed = data_process_scenarios(state, **preprocess_kwargs)
             if extract_scene:
                 processed = {"scenario": state, **processed}
             yield processed
