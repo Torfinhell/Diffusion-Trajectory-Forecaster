@@ -80,7 +80,7 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
     is_interesting = scenarios.object_metadata.objects_of_interest
     is_valid = scenarios.object_metadata.is_valid
     agents_coeffs = jnp.where(is_modeled & is_interesting, 10.0, 1.0)
-    agents_coeffs = jnp.where(is_valid, agents_coeffs, 0.0)
+    agents_coeffs = jnp.where(~is_valid, agents_coeffs, 0.0)
 
     return {
         "agent_past": agent_past,

@@ -26,6 +26,7 @@ class Basetreainer(L.LightningModule):
         loss,
         optimizer,
         scheduler=None,
+        diffusion_scheduler=None,
         grad_clip=None,
         trainer_cfg=None,
         prediction_target="x0",
@@ -56,22 +57,15 @@ class Basetreainer(L.LightningModule):
         )
         self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
         self.metrics_test = MetricCollection([instantiate(m) for m in self.metrics.val])
-        # self.prediction_target = str(prediction_target).lower()
-        # if self.prediction_target not in {"x0", "epsilon", "score"}:
-        #     raise ValueError(
-        #         f"Unsupported prediction_target '{prediction_target}'. "
-        #         "Use one of: x0, epsilon, score."
-        #     )
-        # self.int_beta = lambda t: t
-        # self.t0 = float(t0)
-        # self.t1 = float(t1)
-        # self.dt0 = float(dt0)
-        # self.weight = lambda t: 1 - jnp.exp(-self.int_beta(t))
-        # TODO uncomment for now but later need to use diffusion sampler
         self.model = instantiate(model, key=key_model)
         self.loss_fn = instantiate(loss)
         self.learning_rate_schedule = (
             instantiate(scheduler) if scheduler is not None else None
+        )
+        self.diffusion_scheduler = (
+            instantiate(diffusion_scheduler)
+            if diffusion_scheduler is not None
+            else None
         )
         optimizer_args = {}
         if self.learning_rate_schedule is not None:
@@ -109,10 +103,9 @@ class Basetreainer(L.LightningModule):
 
         step_out = self.make_step(
             model=self.model,
+            diffusion_scheduler=self.diffusion_scheduler,
             loss_fn=self.loss_fn,
-            int_beta=self.int_beta,
             batch=batch,
-            timesteps=self.t1,
             key=step_key,
             train=is_train,
             opt_state=self.opt_state if is_train else None,
@@ -124,14 +117,12 @@ class Basetreainer(L.LightningModule):
             self.opt_state = step_out["opt_state"]
 
         log_metrics = {f"{kind}/loss_step": float(jnp.asarray(step_out["loss"]))}
-        if step_out.get("grad_norm") is not None:
-            log_metrics[f"{kind}/grad_norm"] = float(jnp.asarray(step_out["grad_norm"]))
-        if step_out.get("update_norm") is not None:
-            log_metrics[f"{kind}/update_norm"] = float(
+        if is_train:
+            log_metrics[f"train/grad_norm"] = float(jnp.asarray(step_out["grad_norm"]))
+            log_metrics[f"train/update_norm"] = float(
                 jnp.asarray(step_out["update_norm"])
             )
-        if step_out.get("param_norm") is not None:
-            log_metrics[f"{kind}/param_norm"] = float(
+            log_metrics[f"train/param_norm"] = float(
                 jnp.asarray(step_out["param_norm"])
             )
         if step_out["train_stats"] is not None:
@@ -140,6 +131,7 @@ class Basetreainer(L.LightningModule):
 
         self.log_dict(
             log_metrics,
+            on_step=self.global_step_,
             prog_bar=False,
             on_step=True,
             on_epoch=False,
@@ -147,28 +139,27 @@ class Basetreainer(L.LightningModule):
 
         if is_train:
             self.global_step_ += 1
-
         return step_out["loss"]
 
     @staticmethod
     @eqx.filter_jit
     def make_step(
         model,
+        diffusion_scheduler,
         loss_fn,
-        int_beta,
         batch,
-        timesteps,
         key,
         train,
         opt_state=None,
         opt_update=None,
     ):
+        # TODO how to sample steps?
         if train:
             grad_fn = eqx.filter_value_and_grad(
                 Basetreainer.batch_loss_fn, has_aux=True
             )
             (loss, train_stats), grads = grad_fn(
-                model, loss_fn, int_beta, batch, timesteps, key
+                model, diffusion_scheduler, loss_fn, batch, key
             )
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
@@ -177,7 +168,7 @@ class Basetreainer(L.LightningModule):
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
             loss, train_stats = Basetreainer.batch_loss_fn(
-                model, loss_fn, int_beta, batch, timesteps, key
+                model, diffusion_scheduler, loss_fn, batch, key
             )
             grad_norm = None
             update_norm = None
@@ -196,16 +187,32 @@ class Basetreainer(L.LightningModule):
         }
 
     @staticmethod
-    def batch_loss_fn(model, loss_fn, int_beta, batch, t1, key):
+    @eqx.filter_jit
+    def batch_loss_fn(model, diffusion_scheduler, loss_fn, batch, key):
         batch_size = batch["agent_future"].shape[0]
-        tkey, losskey = jr.split(key)
-        losskey = jr.split(losskey, batch_size)
-        t_min = min(0.1, float(t1) * 0.5)
-        t = jr.uniform(tkey, (batch_size,), minval=t_min, maxval=t1)
-        sample_loss_fn = partial(loss_fn, model, int_beta)
-        sample_loss_fn = jax.vmap(sample_loss_fn)
-        losses, stats = sample_loss_fn(batch, t, losskey)
-        mean_stats = jax.tree_util.tree_map(
-            lambda value: jnp.mean(value, axis=0), stats
+        sample_key, losskey = jr.split(key, 3)
+        num_steps = diffusion_scheduler.num_steps
+        sample_steps = jr.randint(
+            key=sample_key, minval=1, maxval=num_steps, shape=(batch_size, num_steps)
         )
-        return jnp.mean(losses), mean_stats
+        losskey = jr.split(losskey, batch_size)
+        sample_loss_fn = partial(loss_fn, model)
+        sample_loss_fn = jax.vmap(sample_loss_fn)
+        get_model_output = partial(
+            Basetreainer.get_model_output,
+            model,
+            diffusion_scheduler,
+        )
+        get_model_output = jax.vmap(get_model_output)
+        model_output = get_model_output(sample_steps)
+        loss_fn = jax.vmap(loss_fn)
+        return jnp.mean(loss_fn(model_output, **batch))
+
+    @staticmethod
+    @eqx.filter_jit
+    def get_model_output(model, diffusion_scheduler, timesteps):
+        step_fn = jax.vmap(
+            partial(
+                diffusion_scheduler.step,
+            )
+        )

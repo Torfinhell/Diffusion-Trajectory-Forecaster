@@ -1,0 +1,4 @@
+_target_: src.diffusion_samplers.ddpm.DDPMSampler
+steps: 50
+schedule: cosine
+clamp_val: 100.0
