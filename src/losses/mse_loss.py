@@ -14,7 +14,7 @@ class MSELoss:
     def __init__(self):
         super().__init__()
 
-    def __call__(self, model, int_beta, batch, t, key):
+    def __call__(self, model, diffusion_sampler, batch, key):
         gt_xy = batch["agent_future"][..., :2]
         INPUT_DIM = gt_xy.shape
         mean = gt_xy * jnp.exp(-0.5 * int_beta(t))
