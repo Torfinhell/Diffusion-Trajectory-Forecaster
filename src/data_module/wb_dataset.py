@@ -14,7 +14,7 @@ from torch.utils.data import IterableDataset
 from tqdm.auto import tqdm
 from waymax import config, dataloader
 
-from src.data_module.data_process import data_process_scenarios
+from src.data_module.data_process import data_process_scenarios_batch
 
 LOGGER = logging.getLogger(__name__)
 WEBDATASET_FORMAT = "diffusion_tracker_webdataset_v2"
@@ -165,6 +165,37 @@ class Dataset:
         )
         return dataloader.simulator_state_generator(config=waymax_config)
 
+    @staticmethod
+    def _stack_states_batch(states_batch):
+        return jax.tree_util.tree_map(
+            lambda *leaves: jnp.stack(leaves, axis=0),
+            *states_batch,
+        )
+
+    @staticmethod
+    def _split_processed_batch(processed_batch):
+        batch_size = processed_batch["agent_past"].shape[0]
+        return [
+            jax.tree_util.tree_map(lambda leaf, idx=idx: leaf[idx], processed_batch)
+            for idx in range(batch_size)
+        ]
+
+    def _process_states_batch(self, states_batch, extract_scene, preprocess_kwargs):
+        batched_states = self._stack_states_batch(states_batch)
+        processed_batch = data_process_scenarios_batch(
+            batched_states,
+            **preprocess_kwargs,
+        )
+        processed_samples = self._split_processed_batch(processed_batch)
+
+        if not extract_scene:
+            return processed_samples
+
+        return [
+            {"scenario": state, **processed}
+            for state, processed in zip(states_batch, processed_samples, strict=True)
+        ]
+
     def iter_processed_samples(
         self,
         raw_data_url,
@@ -174,6 +205,7 @@ class Dataset:
         max_num_objects,
         extract_scene,
         preprocess_kwargs,
+        batch_size=1,
     ):
         iterator = self.build_waymax_iterator(
             raw_data_url=raw_data_url,
@@ -182,8 +214,11 @@ class Dataset:
         )
         start_index = int(start_index)
         num_states = int(num_states)
+        batch_size = int(batch_size)
+        assert batch_size > 0, "batch_size must be a positive integer"
         produced = 0
         total_to_read = start_index + num_states
+        pending_states = []
 
         for index in tqdm(range(total_to_read), total=total_to_read, desc="Creating dataset"):
             try:
@@ -205,13 +240,31 @@ class Dataset:
             if index < start_index:
                 continue
 
-            processed = data_process_scenarios(state, **preprocess_kwargs)
-            if extract_scene:
-                processed = {"scenario": state, **processed}
-            yield processed
-            produced += 1
-            if produced >= int(num_states):
+            pending_states.append(state)
+            if len(pending_states) < batch_size:
+                continue
+
+            for processed in self._process_states_batch(
+                pending_states,
+                extract_scene=extract_scene,
+                preprocess_kwargs=preprocess_kwargs,
+            ):
+                yield processed
+                produced += 1
+            pending_states = []
+            if produced >= num_states:
                 break
+
+        if pending_states and produced < num_states:
+            for processed in self._process_states_batch(
+                pending_states,
+                extract_scene=extract_scene,
+                preprocess_kwargs=preprocess_kwargs,
+            ):
+                yield processed
+                produced += 1
+                if produced >= num_states:
+                    break
 
     def save_processed_samples(
         self,
@@ -282,6 +335,7 @@ class Dataset:
             max_num_objects=creation_cfg.max_num_objects,
             extract_scene=creation_cfg.extract_scene,
             preprocess_kwargs=creation_cfg.preprocessing,
+            batch_size=getattr(creation_cfg, "batch_size", 1),
         )
 
         LOGGER.info(

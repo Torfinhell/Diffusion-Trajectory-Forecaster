@@ -9,6 +9,7 @@ data:
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000"
       waymax_conf_version: "WOD_1_3_1_TRAINING"
+      batch_size: 96
       num_states: 2000
       max_num_objects: 32
       extract_scene: false
@@ -23,6 +24,7 @@ data:
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
       waymax_conf_version: "WOD_1_3_1_TRAINING"
+      batch_size: 32
       start_index: 0
       num_states: 200
       max_num_objects: 32
@@ -38,6 +40,7 @@ data:
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150"
       waymax_conf_version: "WOD_1_3_1_TRAINING"
+      batch_size: 32
       start_index: 200
       num_states: 100
       max_num_objects: 32

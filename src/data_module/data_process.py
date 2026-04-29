@@ -256,3 +256,35 @@ def data_process_scenarios(
     data_dict.update(agents_info)
     data_dict.update(map_info)
     return data_dict
+
+
+@jax.jit(
+    static_argnames=[
+        "current_index",
+        "use_full_agent_info",
+        "max_polylines",
+        "num_points_polyline",
+        "use_log",
+        "remove_history",
+    ]
+)
+def data_process_scenarios_batch(
+    scenarios,
+    current_index=10,
+    use_full_agent_info=True,
+    max_polylines=256,
+    num_points_polyline=30,
+    use_log=True,
+    remove_history=False,
+):
+    return jax.vmap(
+        lambda scenario: data_process_scenarios(
+            scenario,
+            current_index=current_index,
+            use_full_agent_info=use_full_agent_info,
+            max_polylines=max_polylines,
+            num_points_polyline=num_points_polyline,
+            use_log=use_log,
+            remove_history=remove_history,
+        )
+    )(scenarios)
