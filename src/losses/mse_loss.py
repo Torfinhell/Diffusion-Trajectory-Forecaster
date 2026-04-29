@@ -2,6 +2,10 @@ import jax.numpy as jnp
 import jax.random as jr
 
 
+def _prepare_conditioning(model, batch):
+    return model.prepare_conditioning(batch)
+
+
 def masked_abs_mean(values, weights):
     values = jnp.asarray(values)
     weights = jnp.asarray(weights, dtype=values.dtype)
@@ -22,7 +26,7 @@ class MSELoss:
         std = jnp.sqrt(var)
         noise = jr.normal(key, INPUT_DIM)
         y = mean + std * noise
-        pred_xy = model(t, y, batch["agent_past"])
+        pred_xy = model(t, y, _prepare_conditioning(model, batch))
         err = (pred_xy - gt_xy) ** 2
         weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[
             ..., None, None
