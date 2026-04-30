@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlparse
 
+import boto3
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -41,7 +42,6 @@ def _s3_join(root_url: str, name: str) -> str:
 
 
 def _s3_client():
-    import boto3
 
     return boto3.client("s3")
 
@@ -101,12 +101,16 @@ class Dataset:
         index_path = output_root / WEBDATASET_INDEX_FILENAME
         assert index_path.exists(), f"WebDataset index not found at {index_path}"
         loaded = json.loads(index_path.read_text(encoding="utf-8"))
-        assert loaded.get("format") == WEBDATASET_FORMAT, f"Unsupported dataset format in {index_path}"
+        assert (
+            loaded.get("format") == WEBDATASET_FORMAT
+        ), f"Unsupported dataset format in {index_path}"
         return int(loaded.get("num_samples", 0))
 
     @staticmethod
     def _read_num_samples_from_metadata(metadata: dict) -> int:
-        assert metadata.get("format") == WEBDATASET_FORMAT, "Unsupported WebDataset format"
+        assert (
+            metadata.get("format") == WEBDATASET_FORMAT
+        ), "Unsupported WebDataset format"
         return int(metadata.get("num_samples", 0))
 
     @staticmethod
@@ -220,7 +224,9 @@ class Dataset:
         total_to_read = start_index + num_states
         pending_states = []
 
-        for index in tqdm(range(total_to_read), total=total_to_read, desc="Creating dataset"):
+        for index in tqdm(
+            range(total_to_read), total=total_to_read, desc="Creating dataset"
+        ):
             try:
                 state = next(iterator)
             except Exception as exc:
@@ -324,7 +330,11 @@ class Dataset:
 
     def create_split(self, split: str, artifact_cfg, creation_cfg) -> Path:
         processed_path = self._resolve_local_output_root(artifact_cfg)
-        s3_path = str(artifact_cfg.processed_path) if _is_s3_url(artifact_cfg.processed_path) else None
+        s3_path = (
+            str(artifact_cfg.processed_path)
+            if _is_s3_url(artifact_cfg.processed_path)
+            else None
+        )
 
         LOGGER.info("Creating %s split from raw data", split)
         samples = self.iter_processed_samples(
@@ -399,7 +409,8 @@ class Dataset:
         for shard_idx in range(num_shards):
             shard_name = shard_pattern % shard_idx
             shard_sources.append(
-                "pipe:" + DEFAULT_REMOTE_STREAM_COMMAND.format(
+                "pipe:"
+                + DEFAULT_REMOTE_STREAM_COMMAND.format(
                     url=_s3_join(s3_path, shard_name),
                 )
             )
@@ -422,7 +433,9 @@ class Dataset:
                 s3_path,
                 split,
             )
-            builder = cls(flush_every=int(split_cfg.get("flush_every", DEFAULT_FLUSH_EVERY)))
+            builder = cls(
+                flush_every=int(split_cfg.get("flush_every", DEFAULT_FLUSH_EVERY))
+            )
             builder.create_split(
                 split=split,
                 artifact_cfg=split_cfg,
@@ -444,9 +457,7 @@ class Dataset:
             metadata = cls._read_remote_metadata(split, split_cfg)
             shard_sources = cls._build_remote_shard_sources(s3_path, metadata)
             if not shard_sources:
-                raise FileNotFoundError(
-                    f"No WebDataset shards found under {s3_path}."
-                )
+                raise FileNotFoundError(f"No WebDataset shards found under {s3_path}.")
         else:
             output_root = cls.ensure_local_webdataset(
                 split=split,

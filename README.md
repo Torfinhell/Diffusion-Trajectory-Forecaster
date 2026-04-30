@@ -54,7 +54,7 @@ Notes:
 ### Dataset creation
 To build processed train/val/test datasets from raw Waymo data:
 ```bash
-uv run python scripts/create_dataset.py --config-name small_no_scenes
+ uv run python -m scripts.create_dataset -cn=small_no_scenes
 ```
 
 ### DVC setup

@@ -4,13 +4,18 @@ import hydra
 
 from src.data_module.wb_dataset import Dataset
 
-
 LOGGER = logging.getLogger(__name__)
 
 
-@hydra.main(version_base=None, config_path="src/configs/feat_extract", config_name="small_no_scenes")
+@hydra.main(
+    version_base=None,
+    config_path="../src/configs/feat_extract",
+    config_name="small_no_scenes",
+)
 def main(cfg) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
 
     for split in ["train", "val", "test"]:
         split_cfg = cfg.data[split]
