@@ -20,13 +20,17 @@ class MSELoss:
 
     def __call__(self, model, diffusion_sampler, batch, key):
         gt_xy = batch["agent_future"][..., :2]
-        INPUT_DIM = gt_xy.shape
-        mean = gt_xy * jnp.exp(-0.5 * int_beta(t))
-        var = jnp.maximum(1.0 - jnp.exp(-int_beta(t)), 1e-5)
-        std = jnp.sqrt(var)
-        noise = jr.normal(key, INPUT_DIM)
-        y = mean + std * noise
-        pred_xy = model(t, y, _prepare_conditioning(model, batch))
+        timestep_key, noise_key = jr.split(key)
+        timestep = jr.randint(
+            timestep_key, shape=(), minval=0, maxval=diffusion_sampler.num_steps
+        )
+        noise = jr.normal(noise_key, gt_xy.shape)
+        y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
+        pred_xy = model(
+            jnp.asarray(timestep, dtype=gt_xy.dtype),
+            y,
+            _prepare_conditioning(model, batch),
+        )
         err = (pred_xy - gt_xy) ** 2
         weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[
             ..., None, None

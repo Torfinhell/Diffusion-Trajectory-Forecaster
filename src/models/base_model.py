@@ -1,4 +1,3 @@
-from functools import partial
 from pathlib import Path
 
 import equinox as eqx
@@ -9,7 +8,6 @@ import numpy as np
 import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
-
 from src.metrics import MetricCollection, MetricTracker
 
 
@@ -26,7 +24,7 @@ class Basetreainer(L.LightningModule):
         loss,
         optimizer,
         scheduler=None,
-        diffusion_scheduler=None,
+        diffusion_sampler=None,
         grad_clip=None,
         trainer_cfg=None,
         prediction_target="x0",
@@ -62,9 +60,9 @@ class Basetreainer(L.LightningModule):
         self.learning_rate_schedule = (
             instantiate(scheduler) if scheduler is not None else None
         )
-        self.diffusion_scheduler = (
-            instantiate(diffusion_scheduler)
-            if diffusion_scheduler is not None
+        self.diffusion_sampler = (
+            instantiate(diffusion_sampler)
+            if diffusion_sampler is not None
             else None
         )
         optimizer_args = {}
@@ -85,11 +83,93 @@ class Basetreainer(L.LightningModule):
     def configure_optimizers(self):
         return []
 
-    def training_step(self, batch):
-        return self._step(batch, "train")
+    def _update_metrics_for_batch(self, metrics, batch, num_samples=10):
+        for sample_idx in range(min(batch["agent_future"].shape[0], num_samples)):
+            gt_xy = batch["agent_future"][sample_idx][..., :2]
+            future_valid = batch["agent_future_valid"][sample_idx]
+            pred_xy = self.sample_one_sol(
+                self.model,
+                self.diffusion_sampler,
+                gt_xy.shape,
+                self.model.prepare_conditioning(batch, sample_idx),
+                save_full=False,
+            )[0]
+            metrics.update(
+                pred_xy,
+                gt_xy,
+                batch["agents_coeffs"][sample_idx],
+                future_valid,
+            )
 
-    def validation_step(self, batch):
-        return self._step(batch, "val")
+
+    def sample_one_sol(
+        self,
+        model,
+        diffusion_sampler,
+        data_shape,
+        context,
+        save_full=False,
+        key=None,
+    ):
+        if key is None:
+            self.sample_key, key = jr.split(self.sample_key)
+
+        step_keys = jr.split(key, diffusion_sampler.num_steps + 1)
+        x = jr.normal(step_keys[0], data_shape)
+        path = []
+        for timestep, step_key in zip(
+            range(diffusion_sampler.num_steps - 1, -1, -1), step_keys[1:]
+        ):
+            timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
+            model_output = model(
+                jnp.asarray(timestep, dtype=x.dtype),
+                x,
+                context,
+            )
+            x = diffusion_sampler.step(
+                step_key,
+                model_output,
+                timestep_arr,
+                x,
+            )
+            if save_full:
+                path.append(x)
+
+        if save_full:
+            return jnp.stack(path, axis=0)
+        return x[None, ...]
+
+    def training_step(self, batch):
+        self._step(batch, "train")
+        return None
+
+    def validation_step(self, batch, batch_idx):
+        loss = self._step(batch, "val")
+        metric_every = max(1, int(self.trainer_cfg.get("val_metric_every_n_epochs", 1)))
+        should_run_metrics = (
+            batch_idx == 0
+            and len(self.metrics_val) > 0
+            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+        )
+        if should_run_metrics:
+            num_samples = 10
+            if self.trainer.sanity_checking:
+                num_samples = 1
+            self.metrics_val.reset()
+            self._update_metrics_for_batch(self.metrics_val, batch, num_samples)
+            vals = self.metrics_val.compute()
+            log_dict = {
+                f"val/{k}": float(jnp.asarray(v))
+                for k, v in vals.items()
+            }
+            self.log_dict(
+                log_dict,
+                prog_bar=True,
+                on_step=False,
+                on_epoch=True,
+                batch_size=batch["agent_future"].shape[0],
+            )
+        return loss
 
     def test_step(self, batch):
         return self._step(batch, "test")
@@ -103,7 +183,7 @@ class Basetreainer(L.LightningModule):
 
         step_out = self.make_step(
             model=self.model,
-            diffusion_scheduler=self.diffusion_scheduler,
+            diffusion_sampler=self.diffusion_sampler,
             loss_fn=self.loss_fn,
             batch=batch,
             key=step_key,
@@ -131,10 +211,10 @@ class Basetreainer(L.LightningModule):
 
         self.log_dict(
             log_metrics,
-            on_step=self.global_step_,
             prog_bar=False,
             on_step=True,
             on_epoch=False,
+            batch_size=batch["agent_future"].shape[0],
         )
 
         if is_train:
@@ -145,7 +225,7 @@ class Basetreainer(L.LightningModule):
     @eqx.filter_jit
     def make_step(
         model,
-        diffusion_scheduler,
+        diffusion_sampler,
         loss_fn,
         batch,
         key,
@@ -159,7 +239,7 @@ class Basetreainer(L.LightningModule):
                 Basetreainer.batch_loss_fn, has_aux=True
             )
             (loss, train_stats), grads = grad_fn(
-                model, diffusion_scheduler, loss_fn, batch, key
+                model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
@@ -168,13 +248,13 @@ class Basetreainer(L.LightningModule):
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
             loss, train_stats = Basetreainer.batch_loss_fn(
-                model, diffusion_scheduler, loss_fn, batch, key
+                model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = None
             update_norm = None
             param_norm = None
 
-        key = jr.split(key, 1)[0]
+        #key = jr.split(key, 1)[0]
         return {
             "loss": loss,
             "train_stats": train_stats,
@@ -182,37 +262,18 @@ class Basetreainer(L.LightningModule):
             "update_norm": update_norm,
             "param_norm": param_norm,
             "model": model,
-            "key": key,
+            #"key": key,
             "opt_state": opt_state,
         }
 
     @staticmethod
     @eqx.filter_jit
-    def batch_loss_fn(model, diffusion_scheduler, loss_fn, batch, key):
+    def batch_loss_fn(model, diffusion_sampler, loss_fn, batch, key):
         batch_size = batch["agent_future"].shape[0]
-        sample_key, losskey = jr.split(key, 3)
-        num_steps = diffusion_scheduler.num_steps
-        sample_steps = jr.randint(
-            key=sample_key, minval=1, maxval=num_steps, shape=(batch_size, num_steps)
+        loss_keys = jr.split(key, batch_size)
+        sample_loss_fn = lambda sample, sample_key: loss_fn(
+            model, diffusion_sampler, sample, sample_key
         )
-        losskey = jr.split(losskey, batch_size)
-        sample_loss_fn = partial(loss_fn, model)
-        sample_loss_fn = jax.vmap(sample_loss_fn)
-        get_model_output = partial(
-            Basetreainer.get_model_output,
-            model,
-            diffusion_scheduler,
-        )
-        get_model_output = jax.vmap(get_model_output)
-        model_output = get_model_output(sample_steps)
-        loss_fn = jax.vmap(loss_fn)
-        return jnp.mean(loss_fn(model_output, **batch))
-
-    @staticmethod
-    @eqx.filter_jit
-    def get_model_output(model, diffusion_scheduler, timesteps):
-        step_fn = jax.vmap(
-            partial(
-                diffusion_scheduler.step,
-            )
-        )
+        losses, stats = jax.vmap(sample_loss_fn)(batch, loss_keys)
+        mean_stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
+        return jnp.mean(losses), mean_stats

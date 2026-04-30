@@ -66,7 +66,7 @@ def main(cfg) -> None:
         loss=hparams.loss,
         optimizer=hparams.optimizer,
         scheduler=hparams.scheduler,
-        diffusion_scheduler=hparams.diffusion_sampler,
+        diffusion_sampler=hparams.diffusion_sampler,
         grad_clip=hparams.trainer.gradient_clip_val,
         trainer_cfg=hparams.trainer,
         prediction_target=hparams.prediction_target,
