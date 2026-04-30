@@ -63,10 +63,11 @@ class DDPMSampler(eqx.Module):
             raise ValueError(f"Invalid prediction_type: {prediction_type}")
         pred_prev_mean = self.q_mean(model_output, timestep, sample, prediction_type)
         noise = jr.normal(key, model_output.shape)
-        if timestep > 0:
-            variance = (self.q_variance(timestep) ** 0.5) * noise
-        else:
-            variance = jnp.zeros_like(sample)
+        variance = jnp.where(
+            timestep > 0,
+            (self.q_variance(timestep) ** 0.5) * noise,
+            jnp.zeros_like(sample),
+        )
         return pred_prev_mean + variance
 
     def q_mean(

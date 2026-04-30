@@ -83,21 +83,27 @@ class Basetreainer(L.LightningModule):
     def configure_optimizers(self):
         return []
 
-    def _update_metrics_for_batch(self, metrics, batch, num_samples=10):
-        for sample_idx in range(min(batch["agent_future"].shape[0], num_samples)):
-            gt_xy = batch["agent_future"][sample_idx][..., :2]
-            future_valid = batch["agent_future_valid"][sample_idx]
-            pred_xy = self.sample_one_sol(
-                self.model,
-                self.diffusion_sampler,
-                gt_xy.shape,
-                self.model.prepare_conditioning(batch, sample_idx),
-                save_full=False,
-            )[0]
+    def _update_metrics_for_batch(self, metrics, batch):
+        gt_xy_batch = batch["agent_future"][:, ..., :2]
+        future_valid_batch = batch["agent_future_valid"]
+        agents_coeffs_batch = batch["agents_coeffs"]
+        cond_batch = self.model.prepare_conditioning(batch)
+        batch_size = gt_xy_batch.shape[0]
+        pred_xy_batch = self.sample_batch_sol(
+            self.model,
+            self.diffusion_sampler,
+            gt_xy_batch.shape[1:],
+            cond_batch,
+            batch_size=batch_size,
+        )
+        for sample_idx in range(batch_size):
+            gt_xy = gt_xy_batch[sample_idx]
+            future_valid = future_valid_batch[sample_idx]
+            pred_xy = pred_xy_batch[sample_idx]
             metrics.update(
                 pred_xy,
                 gt_xy,
-                batch["agents_coeffs"][sample_idx],
+                agents_coeffs_batch[sample_idx],
                 future_valid,
             )
 
@@ -116,28 +122,49 @@ class Basetreainer(L.LightningModule):
 
         step_keys = jr.split(key, diffusion_sampler.num_steps + 1)
         x = jr.normal(step_keys[0], data_shape)
-        path = []
-        for timestep, step_key in zip(
-            range(diffusion_sampler.num_steps - 1, -1, -1), step_keys[1:]
-        ):
+        timesteps = jnp.arange(diffusion_sampler.num_steps - 1, -1, -1, dtype=jnp.int32)
+
+        def scan_step(x_t, inputs):
+            timestep, step_key = inputs
             timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
             model_output = model(
-                jnp.asarray(timestep, dtype=x.dtype),
-                x,
+                jnp.asarray(timestep, dtype=x_t.dtype),
+                x_t,
                 context,
             )
-            x = diffusion_sampler.step(
+            x_prev = diffusion_sampler.step(
                 step_key,
                 model_output,
                 timestep_arr,
-                x,
+                x_t,
             )
-            if save_full:
-                path.append(x)
+            return x_prev, x_prev
 
+        x, path = jax.lax.scan(scan_step, x, (timesteps, step_keys[1:]))
         if save_full:
-            return jnp.stack(path, axis=0)
-        return x[None, ...]
+            return path
+        return x
+
+    def sample_batch_sol(
+        self,
+        model,
+        diffusion_sampler,
+        data_shape,
+        context_batch,
+        batch_size,
+        save_full=False,
+    ):
+        self.sample_key, key = jr.split(self.sample_key)
+        sample_keys = jr.split(key, batch_size)
+        sample_fn = lambda sample_key, context: self.sample_one_sol(
+            model,
+            diffusion_sampler,
+            data_shape,
+            context,
+            save_full=save_full,
+            key=sample_key,
+        )
+        return jax.vmap(sample_fn)(sample_keys, context_batch)
 
     def training_step(self, batch):
         self._step(batch, "train")
@@ -152,11 +179,8 @@ class Basetreainer(L.LightningModule):
             and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
         )
         if should_run_metrics:
-            num_samples = 10
-            if self.trainer.sanity_checking:
-                num_samples = 1
             self.metrics_val.reset()
-            self._update_metrics_for_batch(self.metrics_val, batch, num_samples)
+            self._update_metrics_for_batch(self.metrics_val, batch)
             vals = self.metrics_val.compute()
             log_dict = {
                 f"val/{k}": float(jnp.asarray(v))
