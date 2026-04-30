@@ -42,16 +42,14 @@ class DDPMSampler(eqx.Module):
         self.alphas = 1 - betas
         self.alphas_cumprod = jnp.cumprod(self.alphas, 0)
 
-    # def add_noise(  # TODO No grad
-    #     self,
-    #     x_0,  # (F, T)
-    #     noise,  # (F, T)
-    #     timestep,  # (1,)
-    # ):
-    #     coeffs_2 = self.alphas_cumprod[timestep]
-    #     return jnp.sqrt(coeffs_2) * x_0 + jnp.sqrt(1 - coeffs_2) * noise
-    # def get_noise(self):
-    #     pass
+    def add_noise(
+        self,
+        x_0,  # (F, T)
+        noise,  # (F, T)
+        timestep,  # (1,)
+    ):
+        coeffs_2 = self.alphas_cumprod[timestep]
+        return jnp.sqrt(coeffs_2) * x_0 + jnp.sqrt(1 - coeffs_2) * noise
 
     def step(
         self,
@@ -61,10 +59,8 @@ class DDPMSampler(eqx.Module):
         sample,  # (T, F)
         prediction_type="sample",
     ):
-        assert prediction_type in [
-            "sample",
-            "error",
-        ], f"Invalid type: {prediction_type}"
+        if prediction_type not in ["sample", "error", "x0", "epsilon"]:
+            raise ValueError(f"Invalid prediction_type: {prediction_type}")
         pred_prev_mean = self.q_mean(model_output, timestep, sample, prediction_type)
         noise = jr.normal(key, model_output.shape)
         if timestep > 0:
@@ -81,31 +77,41 @@ class DDPMSampler(eqx.Module):
         prediction_type="sample",
     ):
         alpha_prod = self.alphas_cumprod[timestep]
-        alpha_prod_prev = self.alphas_cumprod[jnp.maximum(timestep - 1, 0)]
+        # makes alpha_prod_{-1} = 1
+        alpha_prod_prev = jnp.where(
+            timestep > 0,
+            self.alphas_cumprod[timestep - 1],
+            jnp.array(1.0, dtype=self.alphas_cumprod.dtype),
+        )
         alpha_current = alpha_prod / alpha_prod_prev
         beta_prod = 1 - alpha_prod
         beta_prod_prev = 1 - alpha_prod_prev
-        beta_current = beta_prod / beta_prod_prev
-        if prediction_type == "sample":
+        beta_current = 1 - alpha_current
+        if prediction_type in ("sample", "x0"):
             original_sample = model_output
-        elif prediction_type == "error":
+        elif prediction_type in ("error", "epsilon"):
             original_sample = (sample - beta_prod**0.5 * model_output) / (
                 alpha_prod**0.5
             )
         else:
             raise NotImplementedError
         original_sample = jnp.clip(original_sample, -self.clamp_val, self.clamp_val)
-        original_sample_coeff = (alpha_prod**0.5 * beta_current) / beta_prod
+        original_sample_coeff = (alpha_prod_prev**0.5 * beta_current) / beta_prod
         current_sample_coeff = alpha_current**0.5 * beta_prod_prev / beta_prod
         return sample * current_sample_coeff + original_sample * original_sample_coeff
 
     def q_variance(self, timestep):
         alpha_prod = self.alphas_cumprod[timestep]
-        alpha_prod_prev = self.alphas_cumprod[jnp.maximum(timestep - 1, 0)]
+        alpha_prod_prev = jnp.where(
+            timestep > 0,
+            self.alphas_cumprod[timestep - 1],
+            jnp.array(1.0, dtype=self.alphas_cumprod.dtype),
+        )
+        alpha_current = alpha_prod / alpha_prod_prev
         beta_prod = 1 - alpha_prod
         beta_prod_prev = 1 - alpha_prod_prev
-        beta_current = beta_prod / beta_prod_prev
-        variance = beta_prod / beta_prod_prev * beta_current
+        beta_current = 1 - alpha_current
+        variance = beta_prod_prev / beta_prod * beta_current
         return jnp.clip(variance, 1e-20)
 
     # def q_x0(self):
