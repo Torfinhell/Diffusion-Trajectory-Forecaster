@@ -10,6 +10,9 @@ from src.data_module.wb_dataset import Dataset
 def tree_collate(states):
     sample = states[0]
 
+    if any(state is None for state in states):
+        return list(states)
+
     if isinstance(sample, Mapping):
         metadata_keys = {"__key__", "__url__", "__local_path__"}
         return {

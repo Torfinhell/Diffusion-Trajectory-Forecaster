@@ -9,6 +9,14 @@ import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
 from src.metrics import MetricCollection, MetricTracker
+from src.utils.eval import (
+    image_log_name,
+    log_images,
+    mask_pred_for_plot,
+    plot_vis_kwargs,
+    to_world_frame,
+)
+from src.visualization.viz import plot_simulator_state
 
 
 class Basetreainer(L.LightningModule):
@@ -106,6 +114,7 @@ class Basetreainer(L.LightningModule):
                 agents_coeffs_batch[sample_idx],
                 future_valid,
             )
+        return pred_xy_batch
 
 
     def sample_one_sol(
@@ -166,6 +175,37 @@ class Basetreainer(L.LightningModule):
         )
         return jax.vmap(sample_fn)(sample_keys, context_batch)
 
+    def _log_validation_visualizations(self, batch, sampled_trajs):
+        enable_visualization = bool(self.vis.get("enable_visualization", False))
+        has_scenarios = "scenario" in batch and batch["scenario"] is not None
+        if not enable_visualization or not has_scenarios:
+            return
+
+        images = []
+        plot_kwargs = plot_vis_kwargs(self)
+        num_samples = min(int(self.vis.get("num_samples", 0)), sampled_trajs.shape[0])
+        for i in range(num_samples):
+            scenario = batch["scenario"][i]
+            if scenario is None:
+                continue
+            pred_xy_plot = mask_pred_for_plot(sampled_trajs[i], batch["agents_coeffs"][i])
+            pred_xy_world = to_world_frame(pred_xy_plot, batch["origin_xy"][i])
+            
+            images.append(
+                plot_simulator_state(
+                    scenario,
+                    pred_xy=pred_xy_world,
+                    **plot_kwargs,
+                )
+            )
+
+        if images:
+            log_images(
+                self,
+                image_log_name("val", "predictions"),
+                images,
+            )
+
     def training_step(self, batch):
         self._step(batch, "train")
         return None
@@ -180,7 +220,7 @@ class Basetreainer(L.LightningModule):
         )
         if should_run_metrics:
             self.metrics_val.reset()
-            self._update_metrics_for_batch(self.metrics_val, batch)
+            sampled_trajs = self._update_metrics_for_batch(self.metrics_val, batch)
             vals = self.metrics_val.compute()
             log_dict = {
                 f"val/{k}": float(jnp.asarray(v))
@@ -193,6 +233,7 @@ class Basetreainer(L.LightningModule):
                 on_epoch=True,
                 batch_size=batch["agent_future"].shape[0],
             )
+            self._log_validation_visualizations(batch, sampled_trajs)
         return loss
 
     def test_step(self, batch):
@@ -293,6 +334,11 @@ class Basetreainer(L.LightningModule):
     @staticmethod
     @eqx.filter_jit
     def batch_loss_fn(model, diffusion_sampler, loss_fn, batch, key):
+        batch = {
+            name: value
+            for name, value in batch.items()
+            if name != "scenario"
+        }
         batch_size = batch["agent_future"].shape[0]
         loss_keys = jr.split(key, batch_size)
         sample_loss_fn = lambda sample, sample_key: loss_fn(

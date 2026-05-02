@@ -14,8 +14,9 @@ debug_denoiser_scale: false
 direct_prediction_eval: false
 num_trajectory_samples: 1
 sample_steps: 1
-enable_visualization: false
+enable_visualization: true
 enable_train_visualization: false
+num_samples: 5
 
 # passed into Waymax VizConfig(**viz_config)
 viz_config:

@@ -4,10 +4,44 @@ from src.utils import maybe_save_best_checkpoint
 from src.visualization.viz import plot_simulator_state
 
 
+def _log_validation_visualizations(self, batch, sampled_trajs):
+        enable_visualization = bool(self.vis.get("enable_visualization", False))
+        has_scenarios = "scenario" in batch and batch["scenario"] is not None
+        if not enable_visualization or not has_scenarios:
+            return
+
+        images = []
+        plot_kwargs = plot_vis_kwargs(self)
+        num_samples = min(int(self.vis.get("num_samples", 0)), sampled_trajs.shape[0])
+        for i in range(num_samples):
+            scenario = batch["scenario"][i]
+            if scenario is None:
+                continue
+            pred_xy_plot = mask_pred_for_plot(sampled_trajs[i], batch["agents_coeffs"][i])
+            pred_xy_world = to_world_frame(pred_xy_plot, batch["origin_xy"][i])
+            
+            images.append(
+                plot_simulator_state(
+                    scenario,
+                    pred_xy=pred_xy_world,
+                    **plot_kwargs,
+                )
+            )
+
+        if images:
+            log_images(
+                self,
+                image_log_name("val", "predictions"),
+                images,
+            )
+
+
 def plot_vis_kwargs(model):
     excluded = {
         "debug_metrics",
         "debug_denoiser_scale",
+        "direct_prediction_eval",
+        "num_samples",
         "num_trajectory_samples",
         "sample_steps",
         "sample_video_fps",

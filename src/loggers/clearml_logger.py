@@ -5,8 +5,9 @@ from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 
 class ClearMLLogger(Logger):
-    def __init__(self, project, task, **kwargs):
+    def __init__(self, project, task, mode="online", **kwargs):
         super().__init__()
+        Task.set_offline(mode == "offline")
         self._task = Task.init(project, task, **kwargs)
         self._clearml_logger = self._task.get_logger()
 
@@ -34,7 +35,12 @@ class ClearMLLogger(Logger):
     @rank_zero_only
     def log_image(self, key, images, step=None):
         for i, img in enumerate(images):
-            self._clearml_logger.report_image(key, str(i), step or 0, np.asarray(img))
+            self._clearml_logger.report_image(
+                title=key,
+                series=str(i),
+                iteration=step or 0,
+                image=np.asarray(img),
+            )
 
     @rank_zero_only
     def upload_artifact(self, name, path, metadata=None):

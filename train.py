@@ -24,7 +24,7 @@ from src.utils import (
 @hydra.main(version_base=None, config_name="ddpm_attn", config_path="src/configs")
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=False)
-    logger = instantiate(hparams.logger)
+    logger = instantiate(hparams.logger, mode=hparams.trainer.logging)
     profiler = None
     if cfg.trainer.enable_profiler:
         profiler = PyTorchProfiler(

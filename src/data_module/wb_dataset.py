@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import logging
+import pickle
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
@@ -115,14 +116,12 @@ class Dataset:
 
     @staticmethod
     def _encode_sample_fields(index: int, sample: dict) -> dict:
-        if "scenario" in sample:
-            raise ValueError(
-                "Per-field WebDataset writing does not support raw 'scenario' payloads. "
-                "Use datasets with extract_scene=false."
-            )
-
         encoded = {"__key__": f"{index:09d}"}
         for key, value in sample.items():
+            if key == "scenario":
+                if value is not None:
+                    encoded["scenario.pkl"] = pickle.dumps(value)
+                continue
             encoded[f"{key}.npy"] = np.asarray(value)
         return encoded
 
@@ -184,7 +183,7 @@ class Dataset:
             for idx in range(batch_size)
         ]
 
-    def _process_states_batch(self, states_batch, extract_scene, preprocess_kwargs):
+    def _process_states_batch(self, states_batch, extract_scene, preprocess_kwargs, split=None):
         batched_states = self._stack_states_batch(states_batch)
         processed_batch = data_process_scenarios_batch(
             batched_states,
@@ -195,6 +194,15 @@ class Dataset:
         if not extract_scene:
             return processed_samples
 
+        if split == "val":
+            scenarios_added = 0
+            samples = []
+            for state, processed in zip(states_batch, processed_samples, strict=True):
+                scenario = state if scenarios_added < 5 else None
+                samples.append({"scenario": scenario, **processed})
+                scenarios_added += 1
+            return samples
+
         return [
             {"scenario": state, **processed}
             for state, processed in zip(states_batch, processed_samples, strict=True)
@@ -202,6 +210,7 @@ class Dataset:
 
     def iter_processed_samples(
         self,
+        split,
         raw_data_url,
         waymax_conf_version,
         start_index,
@@ -254,6 +263,7 @@ class Dataset:
                 pending_states,
                 extract_scene=extract_scene,
                 preprocess_kwargs=preprocess_kwargs,
+                split=split,
             ):
                 yield processed
                 produced += 1
@@ -266,6 +276,7 @@ class Dataset:
                 pending_states,
                 extract_scene=extract_scene,
                 preprocess_kwargs=preprocess_kwargs,
+                split=split,
             ):
                 yield processed
                 produced += 1
@@ -338,6 +349,7 @@ class Dataset:
 
         LOGGER.info("Creating %s split from raw data", split)
         samples = self.iter_processed_samples(
+            split=split,
             raw_data_url=creation_cfg.raw_data_url,
             waymax_conf_version=creation_cfg.waymax_conf_version,
             start_index=getattr(creation_cfg, "start_index", 0),
@@ -396,9 +408,13 @@ class Dataset:
         for key, value in sample.items():
             if key in metadata_keys:
                 continue
+            if key == "scenario.pkl":
+                decoded["scenario"] = value
+                continue
             if not key.endswith(".npy"):
                 raise ValueError(f"Unsupported WebDataset field '{key}'")
             decoded[key[:-4]] = value
+        decoded.setdefault("scenario", None)
         return decoded
 
     @classmethod
