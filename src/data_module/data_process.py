@@ -6,6 +6,132 @@ from waymax import dataloader, datatypes
 COORD_SCALE = 1.0
 
 
+def wrap_angle(angle):
+    return (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
+@jax.jit(static_argnames=["x_index", "y_index", "heading_index"])
+def batch_transform_trajs_to_local_frame(
+    trajs,
+    origin_xy,
+    origin_theta,
+    x_index=0,
+    y_index=1,
+    heading_index=5,
+):
+    if trajs.ndim == 3:
+        trajs = trajs[None, ...]
+        squeeze_batch = True
+    elif trajs.ndim == 4:
+        squeeze_batch = False
+    else:
+        raise ValueError(
+            "batch_transform_trajs_to_local_frame expected 3D or 4D input, "
+            f"got {trajs.shape}"
+        )
+
+    x = trajs[..., x_index] # (B, num_agents, num_timesteps)
+    y = trajs[..., y_index]
+    theta = trajs[..., heading_index]
+    origin_xy = origin_xy[None, ...]      # (1, num_agents)
+    origin_theta = origin_theta[None, ...] 
+    origin_x = origin_xy[..., 0][..., None]# (1, num_agents, 1)
+    origin_y = origin_xy[..., 1][..., None]
+    origin_theta = origin_theta[..., None]
+    cos_theta = jnp.cos(origin_theta)
+    sin_theta = jnp.sin(origin_theta)
+    dx = x - origin_x
+    dy = y - origin_y
+    local_x = dx * cos_theta + dy * sin_theta
+    local_y = -dx * sin_theta + dy * cos_theta
+    local_theta = wrap_angle(theta - origin_theta)
+
+    transformed = trajs.at[..., x_index].set(local_x)
+    transformed = transformed.at[..., y_index].set(local_y)
+    transformed = transformed.at[..., heading_index].set(local_theta)
+
+    valid_mask = jnp.any(trajs[..., :3] != 0, axis=-1, keepdims=True)
+    transformed = jnp.where(valid_mask, transformed, 0.0)
+    if squeeze_batch:
+        return transformed[0]
+    return transformed
+
+def batch_transform_polylines_to_local_frame(polylines):
+    if polylines.ndim == 3:
+        polylines = polylines[None, ...]
+        squeeze_batch = True
+    elif polylines.ndim == 4:
+        squeeze_batch = False
+    else:
+        raise ValueError(
+            "batch_transform_polylines_to_local_frame expected 3D or 4D input, "
+            f"got {polylines.shape}"
+        )
+
+    x = polylines[..., 0]
+    y = polylines[..., 1]
+    theta = polylines[..., 2]
+    origin_x = x[:, :, 0, None]
+    origin_y = y[:, :, 0, None]
+    origin_theta = theta[:, :, 0, None]
+    cos_theta = jnp.cos(origin_theta)
+    sin_theta = jnp.sin(origin_theta)
+    dx = x - origin_x
+    dy = y - origin_y
+    local_x = dx * cos_theta + dy * sin_theta
+    local_y = -dx * sin_theta + dy * cos_theta
+    local_theta = wrap_angle(theta - origin_theta)
+    local_polylines = jnp.stack([local_x, local_y, local_theta], axis=-1)
+    valid_mask = jnp.any(polylines[..., :3] != 0, axis=-1, keepdims=True)
+    local_polylines = jnp.where(valid_mask, local_polylines, 0.0)
+    transformed = jnp.concatenate([local_polylines, polylines[..., 3:]], axis=-1)
+    if squeeze_batch:
+        return transformed[0]
+    return transformed
+
+@jax.jit(static_argnames=["x_index", "y_index", "heading_index"])
+def batch_transform_trajs_to_global_frame(
+    trajs,
+    origin_xy,
+    origin_theta,
+    x_index=0,
+    y_index=1,
+    heading_index=None,
+):
+    if trajs.ndim == 3:
+        trajs = trajs[None, ...]
+        origin_xy = origin_xy[None, ...]
+        origin_theta = origin_theta[None, ...]
+        squeeze_batch = True
+    elif trajs.ndim == 4:
+        squeeze_batch = False
+    else:
+        raise ValueError(
+            "batch_transform_trajs_to_global_frame expected 3D or 4D input, "
+            f"got {trajs.shape}"
+        )
+
+    local_x = trajs[..., x_index]
+    local_y = trajs[..., y_index]
+    origin_x = origin_xy[..., 0][..., None]
+    origin_y = origin_xy[..., 1][..., None]
+    origin_theta = origin_theta[..., None]
+    cos_theta = jnp.cos(origin_theta)
+    sin_theta = jnp.sin(origin_theta)
+
+    global_x = local_x * cos_theta - local_y * sin_theta + origin_x
+    global_y = local_x * sin_theta + local_y * cos_theta + origin_y
+
+    transformed = trajs.at[..., x_index].set(global_x)
+    transformed = transformed.at[..., y_index].set(global_y)
+
+    if heading_index is not None and trajs.shape[-1] > heading_index:
+        global_theta = wrap_angle(trajs[..., heading_index] + origin_theta)
+        transformed = transformed.at[..., heading_index].set(global_theta)
+
+    if squeeze_batch:
+        return transformed[0]
+    return transformed
+
 @jax.jit(static_argnames=["topk"])
 def filter_topk_roadgraph_points(roadgraph, reference_points, topk):
     """
@@ -95,16 +221,25 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
         axis=-2,
     ).squeeze(axis=-2)
     origin_xyz = jnp.where(has_history[..., None], origin_xyz, 0.0)
+    origin_theta = jnp.take_along_axis(
+        traj.yaw[..., : current_index + 1],
+        safe_last_valid_idx[..., None],
+        axis=-1,
+    ).squeeze(axis=-1)
+    origin_theta = jnp.where(has_history, origin_theta, 0.0)
 
-    agents_info = agents_info.at[..., :3].set(
-        agents_info[..., :3] - origin_xyz[..., None, :]
-    )
+    agents_info = batch_transform_trajs_to_local_frame(
+    agents_info,
+    origin_xy=origin_xyz[..., :2],
+    origin_theta=origin_theta,
+)
 
     valid_mask = traj.valid[..., None]
     agents_info = jnp.where(valid_mask & has_history[..., None, None], agents_info, 0.0)
 
     agent_past = agents_info[..., : current_index + 1, :]
     agent_future = agents_info[..., current_index + 1 :, :]
+    # has_history is used here
     agent_future_valid = (
         traj.valid[..., current_index + 1 :, None] & has_history[..., None, None]
     )
@@ -123,7 +258,9 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
         "agents_coeffs": agents_coeffs,
         "agents_types": scenarios.object_metadata.object_types,
         "origin_xy": origin_xyz[..., :2],
+        "origin_theta": origin_theta,
     }
+
 
 @jax.jit(static_argnames=["max_polylines", "num_points_polyline"])
 def data_process_map(
@@ -139,31 +276,29 @@ def data_process_map(
     agents_coeffs = agents_info["agents_coeffs"]
     agent_past = agents_info["agent_past"]
     current_valid = agents_coeffs > 0
-    agent_positions = agent_past[:, -1, :2]
+    agent_positions = batch_transform_trajs_to_global_frame(trajs=agent_past[..., :2], 
+                                                            origin_xy=agents_info["origin_xy"], 
+                                                            origin_theta=agents_info["origin_theta"])
+    agent_positions = agent_positions[:, -1, :]
+    # this filter is faster then the one in waymax 
     map_ids = filter_topk_roadgraph_points(roadgraph_points, agent_positions, 1000)
     map_ids = jnp.where(current_valid[:, None], map_ids, -1)
 
     ordered_map_ids = map_ids.T.reshape(-1)
-    initial_sorted_map_ids = jnp.full((max_polylines,), -1, dtype=map_ids.dtype)
 
-    def collect_unique_ids(carry, cur_id):
-        sorted_map_ids, insert_count = carry
-        already_seen = jnp.any(sorted_map_ids == cur_id)
-        can_insert = (cur_id != -1) & (~already_seen) & (insert_count < max_polylines)
-        sorted_map_ids = jax.lax.cond(
-            can_insert,
-            lambda arr: arr.at[insert_count].set(cur_id),
-            lambda arr: arr,
-            sorted_map_ids,
+    def collect_unique_ids(ordered_map_ids, max_polylines):
+        n = ordered_map_ids.shape[0]
+        indices = jnp.arange(n)
+        is_duplicate = jnp.any(
+            (ordered_map_ids[:, None] == ordered_map_ids[None, :])
+            & (indices[:, None] > indices[None, :]),
+            axis=1,
         )
-        insert_count = insert_count + can_insert.astype(jnp.int32)
-        return (sorted_map_ids, insert_count), None
-
-    (sorted_map_ids, _), _ = jax.lax.scan(
-        collect_unique_ids,
-        (initial_sorted_map_ids, jnp.int32(0)),
-        ordered_map_ids,
-    )
+        is_valid = (ordered_map_ids != -1) & ~is_duplicate
+        sort_idx = jnp.argsort((~is_valid).astype(jnp.int32), stable=True)
+        return ordered_map_ids[sort_idx][:max_polylines]
+    
+    sorted_map_ids = collect_unique_ids(ordered_map_ids, max_polylines)
 
     roadgraph_points_x = roadgraph_points.x
     roadgraph_points_y = roadgraph_points.y
@@ -210,12 +345,10 @@ def data_process_map(
             jnp.linspace(0, safe_polyline_len - 1, num_points_polyline)
         ).astype(jnp.int32)
         cur_polyline = jnp.take(polyline, sampled_points, axis=0)
-        cur_valid = ((id != -1) & (polyline_len > 0)).astype(jnp.int32)
-        cur_polyline = jnp.where(cur_valid > 0, cur_polyline, 0.0)
-        return cur_polyline, cur_valid
+        return cur_polyline, 1
 
     polylines, polylines_valid = jax.lax.map(build_polyline, sorted_map_ids)
-
+    polylines = batch_transform_polylines_to_local_frame(polylines)
     return {
         "polylines": polylines,
         "polylines_valid": polylines_valid,
