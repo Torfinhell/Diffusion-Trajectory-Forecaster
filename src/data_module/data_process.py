@@ -232,8 +232,8 @@ def data_process_map(
     return {
         "polylines": polylines,
         "polylines_valid": polylines_valid,
-        "origin_xy": origin_info[..., :2],
-        "origin_theta": origin_info[..., 2], 
+        "polyline_origin_xy": origin_info[..., :2],
+        "polyline_origin_theta": origin_info[..., 2], 
     }
 
 
@@ -264,8 +264,8 @@ def calculate_relations(
     )
     polyline_nodes = jnp.concatenate(
         [
-            polylines_info["origin_xy"],
-            polylines_info["origin_theta"][..., None],
+            polylines_info["polyline_origin_xy"],
+            polylines_info["polyline_origin_theta"][..., None],
         ],
         axis=-1,
     )
