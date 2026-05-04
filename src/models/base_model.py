@@ -14,9 +14,8 @@ from src.utils.eval import (
     log_images,
     mask_pred_for_plot,
     plot_vis_kwargs,
-    to_world_frame,
 )
-from src.data_module.data_process import batch_transform_trajs_to_global_frame
+from src.utils.data_utils import batch_transform_trajs_to_global_frame
 from src.visualization.viz import plot_simulator_state
 
 

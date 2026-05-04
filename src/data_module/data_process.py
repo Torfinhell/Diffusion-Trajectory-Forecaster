@@ -1,136 +1,16 @@
 import jax
 import jax.numpy as jnp
-import tensorflow as tf
-from waymax import dataloader, datatypes
+
+from src.utils.data_utils import (
+    batch_transform_polylines_to_local_frame, 
+    batch_transform_trajs_to_global_frame, 
+    batch_transform_trajs_to_local_frame,
+    wrap_angle
+)
 
 COORD_SCALE = 1.0
 
 
-def wrap_angle(angle):
-    return (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
-
-@jax.jit(static_argnames=["x_index", "y_index", "heading_index"])
-def batch_transform_trajs_to_local_frame(
-    trajs,
-    origin_xy,
-    origin_theta,
-    x_index=0,
-    y_index=1,
-    heading_index=5,
-):
-    if trajs.ndim == 3:
-        trajs = trajs[None, ...]
-        squeeze_batch = True
-    elif trajs.ndim == 4:
-        squeeze_batch = False
-    else:
-        raise ValueError(
-            "batch_transform_trajs_to_local_frame expected 3D or 4D input, "
-            f"got {trajs.shape}"
-        )
-
-    x = trajs[..., x_index] # (B, num_agents, num_timesteps)
-    y = trajs[..., y_index]
-    theta = trajs[..., heading_index]
-    origin_xy = origin_xy[None, ...]      # (1, num_agents)
-    origin_theta = origin_theta[None, ...] 
-    origin_x = origin_xy[..., 0][..., None]# (1, num_agents, 1)
-    origin_y = origin_xy[..., 1][..., None]
-    origin_theta = origin_theta[..., None]
-    cos_theta = jnp.cos(origin_theta)
-    sin_theta = jnp.sin(origin_theta)
-    dx = x - origin_x
-    dy = y - origin_y
-    local_x = dx * cos_theta + dy * sin_theta
-    local_y = -dx * sin_theta + dy * cos_theta
-    local_theta = wrap_angle(theta - origin_theta)
-
-    transformed = trajs.at[..., x_index].set(local_x)
-    transformed = transformed.at[..., y_index].set(local_y)
-    transformed = transformed.at[..., heading_index].set(local_theta)
-
-    valid_mask = jnp.any(trajs[..., :3] != 0, axis=-1, keepdims=True)
-    transformed = jnp.where(valid_mask, transformed, 0.0)
-    if squeeze_batch:
-        return transformed[0]
-    return transformed
-
-def batch_transform_polylines_to_local_frame(polylines):
-    if polylines.ndim == 3:
-        polylines = polylines[None, ...]
-        squeeze_batch = True
-    elif polylines.ndim == 4:
-        squeeze_batch = False
-    else:
-        raise ValueError(
-            "batch_transform_polylines_to_local_frame expected 3D or 4D input, "
-            f"got {polylines.shape}"
-        )
-
-    x = polylines[..., 0]
-    y = polylines[..., 1]
-    theta = polylines[..., 2]
-    origin_x = x[:, :, 0, None]
-    origin_y = y[:, :, 0, None]
-    origin_theta = theta[:, :, 0, None]
-    cos_theta = jnp.cos(origin_theta)
-    sin_theta = jnp.sin(origin_theta)
-    dx = x - origin_x
-    dy = y - origin_y
-    local_x = dx * cos_theta + dy * sin_theta
-    local_y = -dx * sin_theta + dy * cos_theta
-    local_theta = wrap_angle(theta - origin_theta)
-    local_polylines = jnp.stack([local_x, local_y, local_theta], axis=-1)
-    valid_mask = jnp.any(polylines[..., :3] != 0, axis=-1, keepdims=True)
-    local_polylines = jnp.where(valid_mask, local_polylines, 0.0)
-    transformed = jnp.concatenate([local_polylines, polylines[..., 3:]], axis=-1)
-    if squeeze_batch:
-        return transformed[0]
-    return transformed
-
-@jax.jit(static_argnames=["x_index", "y_index", "heading_index"])
-def batch_transform_trajs_to_global_frame(
-    trajs,
-    origin_xy,
-    origin_theta,
-    x_index=0,
-    y_index=1,
-    heading_index=None,
-):
-    if trajs.ndim == 3:
-        trajs = trajs[None, ...]
-        origin_xy = origin_xy[None, ...]
-        origin_theta = origin_theta[None, ...]
-        squeeze_batch = True
-    elif trajs.ndim == 4:
-        squeeze_batch = False
-    else:
-        raise ValueError(
-            "batch_transform_trajs_to_global_frame expected 3D or 4D input, "
-            f"got {trajs.shape}"
-        )
-
-    local_x = trajs[..., x_index]
-    local_y = trajs[..., y_index]
-    origin_x = origin_xy[..., 0][..., None]
-    origin_y = origin_xy[..., 1][..., None]
-    origin_theta = origin_theta[..., None]
-    cos_theta = jnp.cos(origin_theta)
-    sin_theta = jnp.sin(origin_theta)
-
-    global_x = local_x * cos_theta - local_y * sin_theta + origin_x
-    global_y = local_x * sin_theta + local_y * cos_theta + origin_y
-
-    transformed = trajs.at[..., x_index].set(global_x)
-    transformed = transformed.at[..., y_index].set(global_y)
-
-    if heading_index is not None and trajs.shape[-1] > heading_index:
-        global_theta = wrap_angle(trajs[..., heading_index] + origin_theta)
-        transformed = transformed.at[..., heading_index].set(global_theta)
-
-    if squeeze_batch:
-        return transformed[0]
-    return transformed
 
 @jax.jit(static_argnames=["topk"])
 def filter_topk_roadgraph_points(roadgraph, reference_points, topk):
@@ -348,12 +228,97 @@ def data_process_map(
         return cur_polyline, 1
 
     polylines, polylines_valid = jax.lax.map(build_polyline, sorted_map_ids)
-    polylines = batch_transform_polylines_to_local_frame(polylines)
+    polylines, origin_info = batch_transform_polylines_to_local_frame(polylines)
     return {
         "polylines": polylines,
         "polylines_valid": polylines_valid,
+        "origin_xy": origin_info[..., :2],
+        "origin_theta": origin_info[..., 2], 
     }
 
+
+@jax.jit
+def calculate_relations(
+    agents_info,
+    polylines_info,
+    traffic_lights_info,
+):
+    """Build pairwise relations from stored global anchor poses."""
+    traffic_lights = traffic_lights_info["traffic_light_points"]
+
+    agents_valid = jnp.asarray(agents_info["agents_valid"]).astype(bool)
+    polylines_valid = jnp.asarray(polylines_info["polylines_valid"]).astype(bool)
+    if "traffic_lights_valid" in traffic_lights_info:
+        traffic_lights_valid = jnp.asarray(
+            traffic_lights_info["traffic_lights_valid"]
+        ).astype(bool)
+    else:
+        traffic_lights_valid = jnp.any(traffic_lights[..., :2] != 0, axis=-1)
+
+    agent_nodes = jnp.concatenate(
+        [
+            agents_info["origin_xy"],
+            agents_info["origin_theta"][..., None],
+        ],
+        axis=-1,
+    )
+    polyline_nodes = jnp.concatenate(
+        [
+            polylines_info["origin_xy"],
+            polylines_info["origin_theta"][..., None],
+        ],
+        axis=-1,
+    )
+    traffic_light_nodes = jnp.concatenate(
+        [
+            traffic_lights[..., :2],
+            jnp.zeros(traffic_lights.shape[:-1] + (1,), dtype=traffic_lights.dtype),
+        ],
+        axis=-1,
+    )
+
+    all_nodes = jnp.concatenate(
+        [agent_nodes, polyline_nodes, traffic_light_nodes],
+        axis=-2,
+    )
+    all_valid = jnp.concatenate(
+        [agents_valid, polylines_valid, traffic_lights_valid],
+        axis=-1,
+    )
+
+    pos = all_nodes[..., :2]
+    heading = all_nodes[..., 2]
+    pos_diff = pos[..., :, None, :] - pos[..., None, :, :]
+    cos_heading = jnp.cos(heading)[..., :, None]
+    sin_heading = jnp.sin(heading)[..., :, None]
+    local_x = pos_diff[..., 0] * cos_heading + pos_diff[..., 1] * sin_heading
+    local_y = -pos_diff[..., 0] * sin_heading + pos_diff[..., 1] * cos_heading
+    theta_diff = wrap_angle(heading[..., :, None] - heading[..., None, :])
+
+    num_agents = agent_nodes.shape[-2]
+    num_polylines = polyline_nodes.shape[-2]
+    num_total = all_nodes.shape[-2]
+    traffic_start = num_agents + num_polylines
+    traffic_mask = jnp.arange(num_total) >= traffic_start
+    theta_diff = jnp.where(
+        traffic_mask[..., :, None] | traffic_mask[..., None, :],
+        0.0,
+        theta_diff,
+    )
+
+    diag_mask = jnp.eye(num_total, dtype=bool)
+    while diag_mask.ndim < theta_diff.ndim:
+        diag_mask = diag_mask[None, ...]
+    epsilon = jnp.asarray(1e-2, dtype=all_nodes.dtype)
+    local_x = jnp.where(diag_mask, epsilon, local_x)
+    local_y = jnp.where(diag_mask, epsilon, local_y)
+    theta_diff = jnp.where(diag_mask, epsilon, theta_diff)
+
+    pair_valid = all_valid[..., :, None] & all_valid[..., None, :]
+    relations = jnp.stack([local_x, local_y, theta_diff], axis=-1)
+    return {
+        "relations": jnp.where(pair_valid[..., None], relations, 0.0)
+    }
 
 @jax.jit(
     static_argnames=[
@@ -385,10 +350,12 @@ def data_process_scenarios(
         max_polylines=max_polylines,
         num_points_polyline=num_points_polyline,
     )
+    relations_info = calculate_relations(agents_info, map_info, traffic_info)
     data_dict = {}
     data_dict.update(traffic_info)
     data_dict.update(agents_info)
     data_dict.update(map_info)
+    data_dict.update(relations_info)
     return data_dict
 
 
