@@ -8,7 +8,6 @@ from typing import Literal
 
 import jax.nn as jnn
 from einops import rearrange
-from .modules import batch_transform_polylines_to_local_frame
 
 
 class MapEncoder(eqx.Module):
@@ -338,17 +337,18 @@ class Encoder(eqx.Module):
             key=transformer_key,
         )
 
-    def __call__(self, inputs):
-        agent_past = inputs["agent_past"]
-        polylines = inputs["polylines"]
-        polylines_valid = inputs["polylines_valid"]
-        traffic_light_points = inputs["traffic_light_points"]
-        agents_valid = inputs["agents_valid"]
-        agents_types = inputs.get("agents_types")
-
+    def __call__(
+        self, 
+        agent_past, 
+        polylines, #local
+        polylines_valid,
+        traffic_light_points,
+        agents_valid,
+        agents_types,
+        **kwargs,
+        ):
         encoded_agents = self.agent_encoder(agent_past)
-        map_polylines_local = batch_transform_polylines_to_local_frame(polylines)
-        encoded_map_lanes = self.map_encoder(map_polylines_local)
+        encoded_map_lanes = self.map_encoder(polylines)
         encoded_traffic_lights = self.traffic_light_encoder(traffic_light_points)
 
         agents_mask = ~agents_valid
@@ -424,28 +424,13 @@ class DiffAttention(eqx.Module):
         )
         self.out_shape = tuple(out_shape)
 
-    @staticmethod
-    def prepare_conditioning(batch, sample_idx=None):
-        keys = (
-            "agent_past",
-            "polylines",
-            "polylines_valid",
-            "traffic_light_points",
-            "agents_coeffs",
-            "agents_types",
-            "agents_valid",
-        )
-        if sample_idx is None:
-            return {key: batch[key] for key in keys if key in batch}
-        return {key: batch[key][sample_idx] for key in keys if key in batch}
-
-    def __call__(self, t_noise, x_t, cond):
+    def __call__(self, t_noise, x_t, batch):
         if x_t.ndim == 3:
             x_t = x_t[None, ...]
         elif x_t.ndim != 4:
             raise ValueError(f"DiffAttention expected x_t with 3 or 4 dims, got {x_t.shape}")
 
-        encoder_outputs = self.encoder(cond)
+        encoder_outputs = self.encoder(**batch)
         kv_cond = encoder_outputs["encodings"]
         context_mask = encoder_outputs["context_mask"]
         agents_mask = encoder_outputs["agents_mask"]

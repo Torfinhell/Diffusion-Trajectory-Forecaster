@@ -1,11 +1,6 @@
 import jax.numpy as jnp
 import jax.random as jr
 
-
-def _prepare_conditioning(model, batch):
-    return model.prepare_conditioning(batch)
-
-
 def masked_abs_mean(values, weights):
     values = jnp.asarray(values)
     weights = jnp.asarray(weights, dtype=values.dtype)
@@ -26,10 +21,11 @@ class MSELoss:
         )
         noise = jr.normal(noise_key, gt_xy.shape)
         y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
+        timestep_f = jnp.asarray(timestep, dtype=gt_xy.dtype) / jnp.maximum(diffusion_sampler.num_steps - 1, 1)
         pred_xy = model(
-            jnp.asarray(timestep, dtype=gt_xy.dtype),
+            timestep_f,
             y,
-            _prepare_conditioning(model, batch),
+            batch,
         )
         err = (pred_xy - gt_xy) ** 2
         weights = jnp.asarray(batch["agents_coeffs"], dtype=err.dtype)[
@@ -40,6 +36,7 @@ class MSELoss:
         loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
         valid_weights = jnp.asarray(batch["agent_future_valid"], dtype=gt_xy.dtype)
         stats = {
+            "noisy_abs_mean": masked_abs_mean(y, valid_weights),
             "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
             "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
             "valid_ratio": jnp.mean(valid_weights),

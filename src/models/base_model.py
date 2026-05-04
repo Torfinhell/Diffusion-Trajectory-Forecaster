@@ -16,6 +16,7 @@ from src.utils.eval import (
     plot_vis_kwargs,
     to_world_frame,
 )
+from src.data_module.data_process import batch_transform_trajs_to_global_frame
 from src.visualization.viz import plot_simulator_state
 
 
@@ -95,13 +96,12 @@ class Basetreainer(L.LightningModule):
         gt_xy_batch = batch["agent_future"][:, ..., :2]
         future_valid_batch = batch["agent_future_valid"]
         agents_coeffs_batch = batch["agents_coeffs"]
-        cond_batch = self.model.prepare_conditioning(batch)
         batch_size = gt_xy_batch.shape[0]
         pred_xy_batch = self.sample_batch_sol(
             self.model,
             self.diffusion_sampler,
             gt_xy_batch.shape[1:],
-            cond_batch,
+            batch,
             batch_size=batch_size,
         )
         for sample_idx in range(batch_size):
@@ -122,7 +122,7 @@ class Basetreainer(L.LightningModule):
         model,
         diffusion_sampler,
         data_shape,
-        context,
+        batch,
         save_full=False,
         key=None,
     ):
@@ -139,7 +139,7 @@ class Basetreainer(L.LightningModule):
             model_output = model(
                 jnp.asarray(timestep, dtype=x_t.dtype),
                 x_t,
-                context,
+                batch,
             )
             x_prev = diffusion_sampler.step(
                 step_key,
@@ -159,21 +159,22 @@ class Basetreainer(L.LightningModule):
         model,
         diffusion_sampler,
         data_shape,
-        context_batch,
+        batch,
         batch_size,
         save_full=False,
     ):
         self.sample_key, key = jr.split(self.sample_key)
         sample_keys = jr.split(key, batch_size)
-        sample_fn = lambda sample_key, context: self.sample_one_sol(
+        sample_fn = lambda sample_key, batch: self.sample_one_sol(
             model,
             diffusion_sampler,
             data_shape,
-            context,
+            batch,
             save_full=save_full,
             key=sample_key,
         )
-        return jax.vmap(sample_fn)(sample_keys, context_batch)
+        safe_vmap_batch = {k: v for k, v in batch.items() if k != "scenario"}
+        return jax.vmap(sample_fn)(sample_keys, safe_vmap_batch)
 
     def _log_validation_visualizations(self, batch, sampled_trajs):
         enable_visualization = bool(self.vis.get("enable_visualization", False))
@@ -189,7 +190,7 @@ class Basetreainer(L.LightningModule):
             if scenario is None:
                 continue
             pred_xy_plot = mask_pred_for_plot(sampled_trajs[i], batch["agents_coeffs"][i])
-            pred_xy_world = to_world_frame(pred_xy_plot, batch["origin_xy"][i])
+            pred_xy_world = batch_transform_trajs_to_global_frame(pred_xy_plot, origin_xy=batch["origin_xy"][i], origin_theta=batch["origin_theta"][i])
             
             images.append(
                 plot_simulator_state(
