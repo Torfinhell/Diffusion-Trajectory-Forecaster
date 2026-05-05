@@ -149,23 +149,11 @@ class TransformerEncoder(eqx.Module):
             for layer_key in layer_keys
         ]
 
-    def __call__(self, context_tokens, context_mask, relation_tokens=None):
+    def __call__(self, context_tokens, context_mask):
         valid_context = ~context_mask
         self_attn_mask = valid_context[:, None] & valid_context[None, :]
         tokens = jnp.where(context_mask[:, None], 0.0, context_tokens)
-        if relation_tokens is not None:
-            masked_relations = jnp.where(
-                self_attn_mask[..., None], relation_tokens, 0.0
-            )
-            relation_norm = jnp.maximum(
-                self_attn_mask.sum(axis=-1, keepdims=True), 1
-            )
-            relation_context = masked_relations.sum(axis=1) / relation_norm
         for layer in self.layers:
-            if relation_tokens is not None:
-                tokens = jnp.where(
-                    context_mask[:, None], 0.0, tokens + relation_context
-                )
             tokens = layer(tokens, attn_mask=self_attn_mask)
             tokens = jnp.where(context_mask[:, None], 0.0, tokens)
         return tokens
@@ -186,46 +174,29 @@ class FourierEmbedding(eqx.Module):
 
 
 class RelationEncoder(eqx.Module):
-    scalar_embedders: list[FourierEmbedding]
-    scalar_mlps: list[eqx.nn.MLP]
-    out_mlp: eqx.nn.MLP
+    proj: eqx.nn.MLP
 
-    def __init__(self, input_dim: int = 3, hidden_dim: int = 256, key=None):
-        keys = jr.split(key, 2 * input_dim + 1)
-        embed_keys = keys[:input_dim]
-        mlp_keys = keys[input_dim : 2 * input_dim]
-        out_key = keys[-1]
-        self.scalar_embedders = [
-            FourierEmbedding(hidden_dim, key=embed_key) for embed_key in embed_keys
-        ]
-        self.scalar_mlps = [
-            eqx.nn.MLP(
-                in_size=hidden_dim + 1,
-                width_size=hidden_dim,
-                depth=1,
-                out_size=hidden_dim,
-                key=mlp_key,
-            )
-            for mlp_key in mlp_keys
-        ]
-        self.out_mlp = eqx.nn.MLP(
-            in_size=hidden_dim,
+    def __init__(self, hidden_dim: int = 256, key=None):
+        self.proj = eqx.nn.MLP(
+            in_size=4,
             width_size=hidden_dim,
             depth=1,
             out_size=hidden_dim,
-            key=out_key,
+            key=key,
         )
 
-    def __call__(self, relations):
-        encoded = []
-        for idx, (embedder, mlp) in enumerate(
-            zip(self.scalar_embedders, self.scalar_mlps, strict=True)
-        ):
-            scalar = relations[idx]
-            scalar_embed = embedder(scalar)
-            scalar_feat = jnp.concatenate([scalar_embed, scalar[None]], axis=0)
-            encoded.append(mlp(scalar_feat))
-        return self.out_mlp(jnp.sum(jnp.stack(encoded, axis=0), axis=0))
+    def __call__(self, relations, pair_mask):
+        dx = relations[..., 0]
+        dy = relations[..., 1]
+        dtheta = relations[..., 2]
+        rel_features = jnp.stack(
+            [dx, dy, jnp.sin(dtheta), jnp.cos(dtheta)],
+            axis=-1,
+        )
+        edge_emb = jax.vmap(jax.vmap(self.proj))(rel_features)
+        edge_emb = jnp.where(pair_mask[..., None], edge_emb, 0.0)
+        denom = jnp.maximum(pair_mask.sum(axis=-1, keepdims=True), 1)
+        return edge_emb.sum(axis=1) / denom
 
 
 class SceneEncoder(eqx.Module):
@@ -359,6 +330,7 @@ class Encoder(eqx.Module):
     map_encoder: MapEncoder
     traffic_light_encoder: TrafficLightEncoder
     relation_encoder: RelationEncoder
+    relation_proj: eqx.nn.Linear
     transformer_encoder: TransformerEncoder
 
     def __init__(
@@ -374,7 +346,7 @@ class Encoder(eqx.Module):
         transformer_drop_attn: float = 0.1,
         key=None,
     ):
-        agent_key, map_key, traffic_key, relation_key, transformer_key = jr.split(key, 5)
+        agent_key, map_key, traffic_key, relation_key, relation_proj_key, transformer_key = jr.split(key, 6)
         context_dim = int(agent_encoder_args["out_dim"])
         map_embed_dim = context_dim if map_embed_dim is None else int(map_embed_dim)
         traffic_light_embed_dim = (
@@ -384,6 +356,21 @@ class Encoder(eqx.Module):
         self.map_encoder = MapEncoder(map_embed_dim, map_hidden_dim, key=map_key)
         self.traffic_light_encoder = TrafficLightEncoder(traffic_light_embed_dim, key=traffic_key)
         self.relation_encoder = RelationEncoder(hidden_dim=context_dim, key=relation_key)
+        self.relation_proj = eqx.nn.Linear(
+            in_features=context_dim,
+            out_features=context_dim,
+            key=relation_proj_key,
+        )
+        self.relation_proj = eqx.tree_at(
+            lambda layer: layer.weight,
+            self.relation_proj,
+            jnp.zeros_like(self.relation_proj.weight),
+        )
+        self.relation_proj = eqx.tree_at(
+            lambda layer: layer.bias,
+            self.relation_proj,
+            jnp.zeros_like(self.relation_proj.bias),
+        )
         self.transformer_encoder = TransformerEncoder(
             layers=transformer_layers,
             attn_dim=context_dim,
@@ -416,11 +403,16 @@ class Encoder(eqx.Module):
         context_tokens = jnp.concatenate(
             [encoded_agents, encoded_map_lanes, encoded_traffic_lights], axis=0
         )
-        relation_tokens = jax.vmap(jax.vmap(self.relation_encoder))(relations)
+        pair_valid = (~context_mask)[:, None] & (~context_mask)[None, :]
+        relation_context = self.relation_encoder(relations, pair_valid)
+        relation_context = jax.vmap(self.relation_proj)(relation_context)
+        context_tokens = jnp.where(
+            context_mask[:, None], 0.0, context_tokens + relation_context
+        )
         encodings = self.transformer_encoder(
             context_tokens,
             context_mask,
-            relation_tokens=None#relation_tokens,
+            relation_context=None,
         )
 
         outputs = {

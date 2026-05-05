@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 
 import torch.multiprocessing as mp
 
@@ -18,6 +19,7 @@ from src.utils import (
     load_best_checkpoint,
     log_run_metadata,
     process_hparams,
+    resolve_scheduler_decay_steps,
 )
 
 
@@ -32,6 +34,8 @@ def main(cfg) -> None:
         )
     log_run_metadata(logger, hparams)
     dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
+    dm.setup("fit")
+    resolve_scheduler_decay_steps(hparams, dm)
     callbacks = [RichProgressBar(leave=True)]
     if cfg.trainer.enable_jax_profiler:
         jax_profiler_dir = cfg.trainer.get("jax_profiler_dir")

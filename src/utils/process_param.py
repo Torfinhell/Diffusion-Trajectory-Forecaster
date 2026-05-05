@@ -10,7 +10,21 @@ import yaml
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import to_absolute_path
 from omegaconf import OmegaConf
+import math
 
+def resolve_scheduler_decay_steps(hparams, dm) -> None:
+    scheduler_cfg = hparams.get("scheduler")
+    if scheduler_cfg is None or "decay_steps" not in scheduler_cfg:
+        return
+
+    train_steps = len(dm.train_dataloader())
+    limit_train_batches = hparams.trainer.train_epoch_len
+    if isinstance(limit_train_batches, float):
+        train_steps = max(1, math.ceil(train_steps * limit_train_batches))
+    else:
+        train_steps = min(train_steps, int(limit_train_batches))
+
+    scheduler_cfg.decay_steps = int(train_steps * hparams.trainer.num_epochs)
 
 def process_hparams(hparams, print_hparams=True):
     OmegaConf.set_struct(hparams, False)
