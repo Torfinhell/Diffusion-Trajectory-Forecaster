@@ -412,7 +412,6 @@ class Encoder(eqx.Module):
         encodings = self.transformer_encoder(
             context_tokens,
             context_mask,
-            relation_context=None,
         )
 
         outputs = {

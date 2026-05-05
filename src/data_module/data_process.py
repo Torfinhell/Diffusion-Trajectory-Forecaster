@@ -225,7 +225,9 @@ def data_process_map(
             jnp.linspace(0, safe_polyline_len - 1, num_points_polyline)
         ).astype(jnp.int32)
         cur_polyline = jnp.take(polyline, sampled_points, axis=0)
-        return cur_polyline, 1
+        cur_valid = ((id != -1) & (polyline_len > 0)).astype(jnp.int32)
+        cur_polyline = jnp.where(cur_valid > 0, cur_polyline, 0.0)
+        return cur_polyline, cur_valid
 
     polylines, polylines_valid = jax.lax.map(build_polyline, sorted_map_ids)
     polylines, origin_info = batch_transform_polylines_to_local_frame(polylines)

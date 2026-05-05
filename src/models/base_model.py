@@ -206,8 +206,30 @@ class Basetreainer(L.LightningModule):
                 images,
             )
 
-    def training_step(self, batch):
+    def training_step(self, batch, batch_idx):
         self._step(batch, "train")
+        metric_every = max(1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1)))
+        should_run_metrics = (
+            batch_idx == 0
+            and len(self.metrics_train) > 0
+            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+        )
+        if should_run_metrics:
+            self.metrics_train.reset()
+            sampled_trajs = self._update_metrics_for_batch(self.metrics_train, batch)
+            vals = self.metrics_train.compute()
+            log_dict = {
+                f"train/{k}": float(jnp.asarray(v))
+                for k, v in vals.items()
+            }
+            self.log_dict(
+                log_dict,
+                prog_bar=True,
+                on_step=False,
+                on_epoch=True,
+                batch_size=batch["agent_future"].shape[0],
+            )
+            self._log_validation_visualizations(batch, sampled_trajs)
         return None
 
     def validation_step(self, batch, batch_idx):
@@ -236,7 +258,7 @@ class Basetreainer(L.LightningModule):
             self._log_validation_visualizations(batch, sampled_trajs)
         return loss
 
-    def test_step(self, batch):
+    def test_step(self, batch, batch_idx):
         return self._step(batch, "test")
 
     def _step(self, batch, kind):
