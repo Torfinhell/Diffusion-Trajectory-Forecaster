@@ -3,7 +3,7 @@ import jax.random as jr
 from mocked_model import OracleDiffusionModel
 
 from src.metrics import AdeMetric, FdeMetric
-from src.models.base_model import Basetreainer
+from trainers.base_trainer_debug import BaseTrainerDebug
 
 
 class _SamplingHarness:
@@ -26,9 +26,9 @@ class _SamplingHarness:
         return self.oracle_cfg["sampling_t0"]
 
 
-_SamplingHarness._alpha_sigma = staticmethod(Basetreainer._alpha_sigma)
-_SamplingHarness.sample_one_sol = Basetreainer.sample_one_sol
-_SamplingHarness.sample_multiple_sol = Basetreainer.sample_multiple_sol
+_SamplingHarness._alpha_sigma = staticmethod(BaseTrainerDebug._alpha_sigma)
+_SamplingHarness.sample_one_sol = BaseTrainerDebug.sample_one_sol
+_SamplingHarness.sample_multiple_sol = BaseTrainerDebug.sample_multiple_sol
 
 
 def _compute_metrics(pred_xy, gt_xy):

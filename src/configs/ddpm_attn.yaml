@@ -2,13 +2,13 @@ defaults:
   - model: diffusion_attn
   - dataloaders: basic
   - feat_extract: small_no_scenes
-  - transforms: null
   - logger: clearml
   - metrics: all_metrics #TODO Did we fix all metrics?
   - visual: default #TODO Why default here?
   - diffusion_sampler: ddpm
   - _self_
 trainer:
+  debug_type: null
   num_epochs: 20
   train_epoch_len: 1.0
   val_epoch_len: 1.0
@@ -25,24 +25,8 @@ trainer:
   print_hparams: False
   logging: "offline"
   load_best_checkpoint: False
-
-  enable_profiler: False
-  enable_jax_profiler: False
-  jax_profiler_dir: null
-  jax_profiler_start_step: 2
-  jax_profiler_num_steps: 3
-  proxy_val_loss:
-    enabled: false
-    step_stride: 5
-    include_last: true
-
-prediction_target: x0
-t0: 1e-3
-t1: 2.0
-dt0: 0.01
-
 loss:
-  _target_: src.losses.MSELoss
+  _target_: src.losses.MSELossXY
 
 optimizer:
   _target_: optax.adam

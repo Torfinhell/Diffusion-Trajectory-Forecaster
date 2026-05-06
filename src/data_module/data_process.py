@@ -1,15 +1,14 @@
 import jax
 import jax.numpy as jnp
 
-from src.utils.data_utils import (
-    batch_transform_polylines_to_local_frame, 
-    batch_transform_trajs_to_global_frame, 
+from utils.data_utils import (
+    batch_transform_polylines_to_local_frame,
+    batch_transform_trajs_to_global_frame,
     batch_transform_trajs_to_local_frame,
-    wrap_angle
+    wrap_angle,
 )
 
 COORD_SCALE = 1.0
-
 
 
 @jax.jit(static_argnames=["topk"])
@@ -35,15 +34,16 @@ def filter_topk_roadgraph_points(roadgraph, reference_points, topk):
         roadgraph_xy = roadgraph.xy
         dist = jnp.sum((reference_points[..., None, :] - roadgraph_xy) ** 2, axis=-1)
         valid_dist = jnp.where(roadgraph.valid, dist, jnp.inf)
-        top_idx = jnp.argpartition(valid_dist, topk-1, axis=-1)[..., :topk]
+        top_idx = jnp.argpartition(valid_dist, topk - 1, axis=-1)[..., :topk]
 
         roadgraph_ids = jnp.broadcast_to(
-        roadgraph.ids, top_idx.shape[:-1] + (roadgraph.ids.shape[-1],)
+            roadgraph.ids, top_idx.shape[:-1] + (roadgraph.ids.shape[-1],)
         )
         return jnp.take_along_axis(roadgraph_ids, top_idx, axis=-1)
 
     else:
         return roadgraph.ids
+
 
 @jax.jit(static_argnames=["current_index"])
 def data_process_traffic_light(scenarios, current_index=10):
@@ -109,10 +109,10 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
     origin_theta = jnp.where(has_history, origin_theta, 0.0)
 
     agents_info = batch_transform_trajs_to_local_frame(
-    agents_info,
-    origin_xy=origin_xyz[..., :2],
-    origin_theta=origin_theta,
-)
+        agents_info,
+        origin_xy=origin_xyz[..., :2],
+        origin_theta=origin_theta,
+    )
 
     valid_mask = traj.valid[..., None]
     agents_info = jnp.where(valid_mask & has_history[..., None, None], agents_info, 0.0)
@@ -156,11 +156,13 @@ def data_process_map(
     agents_coeffs = agents_info["agents_coeffs"]
     agent_past = agents_info["agent_past"]
     current_valid = agents_coeffs > 0
-    agent_positions = batch_transform_trajs_to_global_frame(trajs=agent_past[..., :2], 
-                                                            origin_xy=agents_info["origin_xy"], 
-                                                            origin_theta=agents_info["origin_theta"])
+    agent_positions = batch_transform_trajs_to_global_frame(
+        trajs=agent_past[..., :2],
+        origin_xy=agents_info["origin_xy"],
+        origin_theta=agents_info["origin_theta"],
+    )
     agent_positions = agent_positions[:, -1, :]
-    # this filter is faster then the one in waymax 
+    # this filter is faster then the one in waymax
     map_ids = filter_topk_roadgraph_points(roadgraph_points, agent_positions, 1000)
     map_ids = jnp.where(current_valid[:, None], map_ids, -1)
 
@@ -177,7 +179,7 @@ def data_process_map(
         is_valid = (ordered_map_ids != -1) & ~is_duplicate
         sort_idx = jnp.argsort((~is_valid).astype(jnp.int32), stable=True)
         return ordered_map_ids[sort_idx][:max_polylines]
-    
+
     sorted_map_ids = collect_unique_ids(ordered_map_ids, max_polylines)
 
     roadgraph_points_x = roadgraph_points.x
@@ -214,7 +216,7 @@ def data_process_map(
         )
         # [num_points, 5]
 
-        #moving valid points to the front
+        # moving valid points to the front
         sort_key = jnp.where(point_mask, 0, 1)
         order = jnp.argsort(sort_key, stable=True)
         polyline = jnp.take(polyline, order, axis=0)
@@ -235,7 +237,7 @@ def data_process_map(
         "polylines": polylines,
         "polylines_valid": polylines_valid,
         "polyline_origin_xy": origin_info[..., :2],
-        "polyline_origin_theta": origin_info[..., 2], 
+        "polyline_origin_theta": origin_info[..., 2],
     }
 
 
@@ -318,9 +320,8 @@ def calculate_relations(
 
     pair_valid = all_valid[..., :, None] & all_valid[..., None, :]
     relations = jnp.stack([local_x, local_y, theta_diff], axis=-1)
-    return {
-        "relations": jnp.where(pair_valid[..., None], relations, 0.0)
-    }
+    return {"relations": jnp.where(pair_valid[..., None], relations, 0.0)}
+
 
 @jax.jit(
     static_argnames=[

@@ -30,6 +30,7 @@ dependencies = [
     "setuptools<81",
     "tensorboard-plugin-profile<2.20",
     "pandas>=3.0.2",
+    "xprof>=2.22.2",
 ]
 
 [tool.uv.sources]

@@ -1,12 +1,10 @@
-import equinox as eqx
-import jax
-import jax.numpy as jnp
-import jax.random as jr
-
-
 from typing import Literal
 
+import equinox as eqx
+import jax
 import jax.nn as jnn
+import jax.numpy as jnp
+import jax.random as jr
 from einops import rearrange
 
 
@@ -65,6 +63,7 @@ class TrafficLightEncoder(eqx.Module):
 
         traffic_light_type = jnp.clip(inputs[:, 2].astype(jnp.int32), 0, 7)
         return jax.vmap(self.type_embed)(traffic_light_type)
+
 
 class AttentionMLP(eqx.Module):
     attn: eqx.nn.MultiheadAttention
@@ -346,16 +345,29 @@ class Encoder(eqx.Module):
         transformer_drop_attn: float = 0.1,
         key=None,
     ):
-        agent_key, map_key, traffic_key, relation_key, relation_proj_key, transformer_key = jr.split(key, 6)
+        (
+            agent_key,
+            map_key,
+            traffic_key,
+            relation_key,
+            relation_proj_key,
+            transformer_key,
+        ) = jr.split(key, 6)
         context_dim = int(agent_encoder_args["out_dim"])
         map_embed_dim = context_dim if map_embed_dim is None else int(map_embed_dim)
         traffic_light_embed_dim = (
-            context_dim if traffic_light_embed_dim is None else int(traffic_light_embed_dim)
+            context_dim
+            if traffic_light_embed_dim is None
+            else int(traffic_light_embed_dim)
         )
         self.agent_encoder = SceneEncoder(**agent_encoder_args, key=agent_key)
         self.map_encoder = MapEncoder(map_embed_dim, map_hidden_dim, key=map_key)
-        self.traffic_light_encoder = TrafficLightEncoder(traffic_light_embed_dim, key=traffic_key)
-        self.relation_encoder = RelationEncoder(hidden_dim=context_dim, key=relation_key)
+        self.traffic_light_encoder = TrafficLightEncoder(
+            traffic_light_embed_dim, key=traffic_key
+        )
+        self.relation_encoder = RelationEncoder(
+            hidden_dim=context_dim, key=relation_key
+        )
         self.relation_proj = eqx.nn.Linear(
             in_features=context_dim,
             out_features=context_dim,
@@ -382,16 +394,16 @@ class Encoder(eqx.Module):
         )
 
     def __call__(
-        self, 
-        agent_past, 
-        polylines, #local
+        self,
+        agent_past,
+        polylines,  # local
         polylines_valid,
         traffic_light_points,
         relations,
         agents_valid,
         agents_types,
         **kwargs,
-        ):
+    ):
         encoded_agents = self.agent_encoder(agent_past)
         encoded_map_lanes = self.map_encoder(polylines)
         encoded_traffic_lights = self.traffic_light_encoder(traffic_light_points)
@@ -399,7 +411,9 @@ class Encoder(eqx.Module):
         agents_mask = ~agents_valid
         maps_mask = polylines_valid <= 0
         traffic_lights_mask = jnp.all(traffic_light_points == 0, axis=-1)
-        context_mask = jnp.concatenate([agents_mask, maps_mask, traffic_lights_mask], axis=0)
+        context_mask = jnp.concatenate(
+            [agents_mask, maps_mask, traffic_lights_mask], axis=0
+        )
         context_tokens = jnp.concatenate(
             [encoded_agents, encoded_map_lanes, encoded_traffic_lights], axis=0
         )
@@ -424,7 +438,6 @@ class Encoder(eqx.Module):
         if agents_types is not None:
             outputs["agents_types"] = agents_types
         return outputs
-
 
 
 class DiffAttention(eqx.Module):
@@ -478,13 +491,15 @@ class DiffAttention(eqx.Module):
         )
         self.out_shape = tuple(out_shape)
 
-    def __call__(self, t_noise, x_t, batch):
+    def __call__(self, t_noise, x_t, **batch_kwargs):
         if x_t.ndim == 3:
             x_t = x_t[None, ...]
         elif x_t.ndim != 4:
-            raise ValueError(f"DiffAttention expected x_t with 3 or 4 dims, got {x_t.shape}")
+            raise ValueError(
+                f"DiffAttention expected x_t with 3 or 4 dims, got {x_t.shape}"
+            )
 
-        encoder_outputs = self.encoder(**batch)
+        encoder_outputs = self.encoder(**batch_kwargs)
         kv_cond = encoder_outputs["encodings"]
         context_mask = encoder_outputs["context_mask"]
         agents_mask = encoder_outputs["agents_mask"]

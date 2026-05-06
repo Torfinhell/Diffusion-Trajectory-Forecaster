@@ -4,22 +4,22 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import numpy as np
 import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
-from src.metrics import MetricCollection, MetricTracker
+
+from src.metrics import MetricCollection
 from src.utils.eval import (
     image_log_name,
     log_images,
     mask_pred_for_plot,
     plot_vis_kwargs,
 )
-from src.utils.data_utils import batch_transform_trajs_to_global_frame
 from src.visualization.viz import plot_simulator_state
+from utils.data_utils import batch_transform_trajs_to_global_frame
 
 
-class Basetreainer(L.LightningModule):
+class BaseTrainer(L.LightningModule):
     CHECKPOINT_ROOT = Path("checkpoints")
 
     def __init__(
@@ -35,10 +35,6 @@ class Basetreainer(L.LightningModule):
         diffusion_sampler=None,
         grad_clip=None,
         trainer_cfg=None,
-        prediction_target="x0",
-        t0=1e-3,
-        t1=2.0,
-        dt0=0.01,
         **kwargs,
     ):
         super().__init__()
@@ -69,9 +65,7 @@ class Basetreainer(L.LightningModule):
             instantiate(scheduler) if scheduler is not None else None
         )
         self.diffusion_sampler = (
-            instantiate(diffusion_sampler)
-            if diffusion_sampler is not None
-            else None
+            instantiate(diffusion_sampler) if diffusion_sampler is not None else None
         )
         optimizer_args = {}
         if self.learning_rate_schedule is not None:
@@ -79,7 +73,6 @@ class Basetreainer(L.LightningModule):
         optimizer_transform = instantiate(optimizer, **optimizer_args)
         self.optim = self.clip_optimizer(optimizer_transform)
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
-        self.data_shape = None
 
     def clip_optimizer(self, optimizer):
         transforms = []
@@ -87,9 +80,6 @@ class Basetreainer(L.LightningModule):
             transforms.append(optax.clip_by_global_norm(self.grad_clip))
         transforms.append(optimizer)
         return optax.chain(*transforms)
-
-    def configure_optimizers(self):
-        return []
 
     def _update_metrics_for_batch(self, metrics, batch):
         gt_xy_batch = batch["agent_future"][:, ..., :2]
@@ -114,7 +104,6 @@ class Basetreainer(L.LightningModule):
                 future_valid,
             )
         return pred_xy_batch
-
 
     def sample_one_sol(
         self,
@@ -188,9 +177,15 @@ class Basetreainer(L.LightningModule):
             scenario = batch["scenario"][i]
             if scenario is None:
                 continue
-            pred_xy_plot = mask_pred_for_plot(sampled_trajs[i], batch["agents_coeffs"][i])
-            pred_xy_world = batch_transform_trajs_to_global_frame(pred_xy_plot, origin_xy=batch["origin_xy"][i], origin_theta=batch["origin_theta"][i])
-            
+            pred_xy_plot = mask_pred_for_plot(
+                sampled_trajs[i], batch["agents_coeffs"][i]
+            )
+            pred_xy_world = batch_transform_trajs_to_global_frame(
+                pred_xy_plot,
+                origin_xy=batch["origin_xy"][i],
+                origin_theta=batch["origin_theta"][i],
+            )
+
             images.append(
                 plot_simulator_state(
                     scenario,
@@ -207,21 +202,22 @@ class Basetreainer(L.LightningModule):
             )
 
     def training_step(self, batch, batch_idx):
-        self._step(batch, "train")
-        metric_every = max(1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1)))
+        loss = self._step(batch, "train")
+        metric_every = max(
+            1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1))
+        )
         should_run_metrics = (
             batch_idx == 0
             and len(self.metrics_train) > 0
-            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+            and (
+                (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
+            )
         )
         if should_run_metrics:
             self.metrics_train.reset()
             sampled_trajs = self._update_metrics_for_batch(self.metrics_train, batch)
             vals = self.metrics_train.compute()
-            log_dict = {
-                f"train/{k}": float(jnp.asarray(v))
-                for k, v in vals.items()
-            }
+            log_dict = {f"train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
             self.log_dict(
                 log_dict,
                 prog_bar=True,
@@ -230,7 +226,7 @@ class Basetreainer(L.LightningModule):
                 batch_size=batch["agent_future"].shape[0],
             )
             self._log_validation_visualizations(batch, sampled_trajs)
-        return None
+        return loss
 
     def validation_step(self, batch, batch_idx):
         loss = self._step(batch, "val")
@@ -238,16 +234,15 @@ class Basetreainer(L.LightningModule):
         should_run_metrics = (
             batch_idx == 0
             and len(self.metrics_val) > 0
-            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+            and (
+                (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
+            )
         )
         if should_run_metrics:
             self.metrics_val.reset()
             sampled_trajs = self._update_metrics_for_batch(self.metrics_val, batch)
             vals = self.metrics_val.compute()
-            log_dict = {
-                f"val/{k}": float(jnp.asarray(v))
-                for k, v in vals.items()
-            }
+            log_dict = {f"val/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
             self.log_dict(
                 log_dict,
                 prog_bar=True,
@@ -292,9 +287,6 @@ class Basetreainer(L.LightningModule):
             log_metrics[f"train/param_norm"] = float(
                 jnp.asarray(step_out["param_norm"])
             )
-        if step_out["train_stats"] is not None:
-            for stat_key, stat_value in step_out["train_stats"].items():
-                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
 
         self.log_dict(
             log_metrics,
@@ -322,50 +314,45 @@ class Basetreainer(L.LightningModule):
     ):
         # TODO how to sample steps?
         if train:
-            grad_fn = eqx.filter_value_and_grad(
-                Basetreainer.batch_loss_fn, has_aux=True
-            )
-            (loss, train_stats), grads = grad_fn(
-                model, diffusion_sampler, loss_fn, batch, key
-            )
+            grad_fn = eqx.filter_value_and_grad(BaseTrainer.batch_loss_fn, has_aux=True)
+            loss, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss, train_stats = Basetreainer.batch_loss_fn(
+            loss = BaseTrainer.batch_loss_fn(
                 model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = None
             update_norm = None
             param_norm = None
 
-        #key = jr.split(key, 1)[0]
+        # key = jr.split(key, 1)[0]
         return {
             "loss": loss,
-            "train_stats": train_stats,
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
             "model": model,
-            #"key": key,
+            # "key": key,
             "opt_state": opt_state,
         }
 
-    @staticmethod
     @eqx.filter_jit
     def batch_loss_fn(model, diffusion_sampler, loss_fn, batch, key):
-        batch = {
-            name: value
-            for name, value in batch.items()
-            if name != "scenario"
-        }
-        batch_size = batch["agent_future"].shape[0]
+        batch = {k: v for k, v in batch.items() if k != "scenario"}
+        batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
         loss_keys = jr.split(key, batch_size)
-        sample_loss_fn = lambda sample, sample_key: loss_fn(
-            model, diffusion_sampler, sample, sample_key
-        )
-        losses, stats = jax.vmap(sample_loss_fn)(batch, loss_keys)
-        mean_stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
-        return jnp.mean(losses), mean_stats
+
+        def mapped_fn(single_sample_dict, single_key):
+            return loss_fn(
+                model=model,
+                diffusion_sampler=diffusion_sampler,
+                key=single_key,
+                **single_sample_dict,
+            )
+
+        losses = jax.vmap(mapped_fn)(batch, loss_keys)
+        return jnp.mean(losses)

@@ -1,17 +1,17 @@
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import hydra
 import optuna
 from hydra import compose
 from hydra.core.hydra_config import HydraConfig
-from pytorch_lightning.trainer import Trainer
 from omegaconf import OmegaConf
+from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.models.base_model import Basetreainer
 from src.utils.process_param import process_hparams, resolve_scheduler_decay_steps
+from trainers.base_trainer_debug import BaseTrainerDebug
 
 
 def _round_to_multiple(value: int, multiple: int) -> int:
@@ -64,7 +64,9 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
 
     apply_scaled_model_params(cfg, trial, tune_cfg)
 
-    batch_size = trial.suggest_categorical("batch_size", list(tune_cfg.search.batch_sizes))
+    batch_size = trial.suggest_categorical(
+        "batch_size", list(tune_cfg.search.batch_sizes)
+    )
     lr0 = trial.suggest_float(
         "lr0",
         float(tune_cfg.search.lr0.min),
@@ -87,7 +89,9 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
     cfg.trainer.num_epochs = int(tune_cfg.trainer.num_epochs)
     cfg.trainer.train_epoch_len = tune_cfg.trainer.train_epoch_len
     cfg.trainer.val_epoch_len = tune_cfg.trainer.val_epoch_len
-    cfg.trainer.val_metric_every_n_epochs = int(tune_cfg.trainer.val_metric_every_n_epochs)
+    cfg.trainer.val_metric_every_n_epochs = int(
+        tune_cfg.trainer.val_metric_every_n_epochs
+    )
     cfg.trainer.train_metric_every_n_epochs = int(
         tune_cfg.trainer.train_metric_every_n_epochs
     )
@@ -107,7 +111,7 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
     dm.setup("fit")
     resolve_scheduler_decay_steps(hparams, dm)
 
-    diff_model = Basetreainer(
+    diff_model = BaseTrainerDebug(
         seed=hparams.trainer.seed,
         load_best_checkpoint=hparams.trainer.load_best_checkpoint,
         cfg_metrics=hparams.metrics,
