@@ -219,3 +219,5 @@ data/*/*
 !data/dataset/
 resolved_config.yaml
 *.zip
+lightning_logs
+clearml

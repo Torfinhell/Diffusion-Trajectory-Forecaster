@@ -9,6 +9,7 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricCollection
+from src.utils.data_utils import batch_transform_trajs_to_global_frame
 from src.utils.eval import (
     image_log_name,
     log_images,
@@ -16,7 +17,6 @@ from src.utils.eval import (
     plot_vis_kwargs,
 )
 from src.visualization.viz import plot_simulator_state
-from utils.data_utils import batch_transform_trajs_to_global_frame
 
 
 class BaseTrainer(L.LightningModule):
@@ -340,19 +340,14 @@ class BaseTrainer(L.LightningModule):
             "opt_state": opt_state,
         }
 
+    @staticmethod
     @eqx.filter_jit
     def batch_loss_fn(model, diffusion_sampler, loss_fn, batch, key):
-        batch = {k: v for k, v in batch.items() if k != "scenario"}
-        batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
+        batch = {name: value for name, value in batch.items() if name != "scenario"}
+        batch_size = batch["agent_future"].shape[0]
         loss_keys = jr.split(key, batch_size)
-
-        def mapped_fn(single_sample_dict, single_key):
-            return loss_fn(
-                model=model,
-                diffusion_sampler=diffusion_sampler,
-                key=single_key,
-                **single_sample_dict,
-            )
-
-        losses = jax.vmap(mapped_fn)(batch, loss_keys)
+        sample_loss_fn = lambda sample, sample_key: loss_fn(
+            model, diffusion_sampler, **sample, key=sample_key
+        )
+        losses = jax.vmap(sample_loss_fn)(batch, loss_keys)
         return jnp.mean(losses)

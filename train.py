@@ -7,20 +7,19 @@ from pytorch_lightning.callbacks import RichProgressBar
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.utils import (
-    JaxProfilerCallback,
-    log_run_metadata,
-    process_hparams,
-    resolve_scheduler_decay_steps,
-)
-from trainers import BaseProfilerDebug, BaseTrainer, BaseTrainerDebug
+from src.trainers import BaseProfilerDebug, BaseTrainer, BaseTrainerDebug
+from src.utils import log_run_metadata, process_hparams, resolve_scheduler_decay_steps
 
 
 @hydra.main(version_base=None, config_name="ddpm_attn", config_path="src/configs")
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=False)
-    logger = instantiate(hparams.logger) if getattr(hparams, "logger", None) else None
-    if logger:
+    logger = None
+    if hparams.get("logger", None) is not None:
+        logger = (
+            instantiate(hparams.logger) if getattr(hparams, "logger", None) else None
+        )
+    if logger is not None:
         log_run_metadata(logger, hparams)
 
     dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
@@ -36,7 +35,8 @@ def main(cfg) -> None:
 
     if debug_type not in trainer_mapping:
         raise NotImplementedError(f"Debugging of type {debug_type} is not implemented")
-
+    logger_name = logger.name if logger is not None else "default_run"
+    jax_profiler_dir = f"./clearml/{logger_name}/jax_profiler"
     diff_trainer_kwargs = dict(
         seed=hparams.trainer.seed,
         load_best_checkpoint=hparams.trainer.load_best_checkpoint,
@@ -49,23 +49,15 @@ def main(cfg) -> None:
         diffusion_sampler=hparams.diffusion_sampler,
         grad_clip=hparams.trainer.gradient_clip_val,
         trainer_cfg=hparams.trainer,
+        log_dir=jax_profiler_dir,
+        start_step=cfg.trainer.get("jax_profiler_start_step", 2),
+        num_steps=cfg.trainer.get("jax_profiler_num_steps", 3),
     )
 
     diff_trainer = trainer_mapping[debug_type](**diff_trainer_kwargs)
 
     callbacks = [RichProgressBar(leave=True)]
     profiler = None
-
-    if debug_type == "profiler":
-        log_name = logger.name if logger else "default_run"
-        jax_profiler_dir = f"./clearml/{log_name}/jax_profiler"
-        profiler = JaxProfilerCallback(
-            log_dir=jax_profiler_dir,
-            start_step=cfg.trainer.get("jax_profiler_start_step", 2),
-            num_steps=cfg.trainer.get("jax_profiler_num_steps", 3),
-        )
-        callbacks.append(profiler)
-
     trainer = Trainer(
         accelerator="gpu",
         max_epochs=hparams.trainer.num_epochs,

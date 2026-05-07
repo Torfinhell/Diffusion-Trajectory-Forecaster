@@ -10,7 +10,6 @@ from hydra.utils import instantiate
 
 
 class BaseProfilerDebug(L.LightningModule):
-    CHECKPOINT_ROOT = Path("checkpoints")
 
     def __init__(
         self,
@@ -18,13 +17,20 @@ class BaseProfilerDebug(L.LightningModule):
         model,
         loss,
         optimizer,
+        log_dir,
+        start_step,
+        num_steps,
         scheduler=None,
         diffusion_sampler=None,
         grad_clip=None,
-        trainer_cfg=None,
         **kwargs,
     ):
         super().__init__()
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._seen_train_batches = 0
+        self.start_step = int(start_step)
+        self.stop_step = self.start_step + int(num_steps)
         self.save_hyperparameters(ignore=["kwargs"])
         del kwargs
         self.automatic_optimization = False
@@ -32,7 +38,6 @@ class BaseProfilerDebug(L.LightningModule):
         self.key, key_model, self.train_key, self.loader_key = jax.random.split(
             self.key, 4
         )
-        self.trainer_cfg = trainer_cfg or {}
         self.grad_clip = None if grad_clip is None else float(grad_clip)
         if self.grad_clip is not None and self.grad_clip <= 0:
             self.grad_clip = None
@@ -52,6 +57,9 @@ class BaseProfilerDebug(L.LightningModule):
         self.optim = self.clip_optimizer(optimizer_transform)
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
 
+    def configure_optimizers(self):
+        return []
+
     def clip_optimizer(self, optimizer):
         transforms = []
         if self.grad_clip is not None:
@@ -60,15 +68,21 @@ class BaseProfilerDebug(L.LightningModule):
         return optax.chain(*transforms)
 
     def training_step(self, batch, batch_idx):
-        loss = self._step(batch, "train")
+        if self.start_step <= self.global_step_ <= self.stop_step:
+            with jax.profiler.trace(self.log_dir / "_step/train"):
+                loss = self._step(batch, "train")
+        else:
+            loss = self._step(batch, "train")
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss = self._step(batch, "val")
+        with jax.profiler.trace(self.log_dir / "_step/val"):
+            loss = self._step(batch, "val")
         return loss
 
     def test_step(self, batch, batch_idx):
-        return self._step(batch, "test")
+        with jax.profiler.trace(self.log_dir / "_step/test"):
+            return self._step(batch, "test")
 
     def _step(self, batch, kind):
         is_train = kind == "train"
@@ -142,7 +156,7 @@ class BaseProfilerDebug(L.LightningModule):
         batch_size = batch["agent_future"].shape[0]
         loss_keys = jr.split(key, batch_size)
         sample_loss_fn = lambda sample, sample_key: loss_fn(
-            model, diffusion_sampler, sample, sample_key
+            model, diffusion_sampler, **sample, key=sample_key
         )
         losses = jax.vmap(sample_loss_fn)(batch, loss_keys)
         return jnp.mean(losses)

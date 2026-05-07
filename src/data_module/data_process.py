@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from utils.data_utils import (
+from src.utils.data_utils import (
     batch_transform_polylines_to_local_frame,
     batch_transform_trajs_to_global_frame,
     batch_transform_trajs_to_local_frame,

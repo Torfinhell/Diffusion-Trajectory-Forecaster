@@ -9,10 +9,10 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricCollection, MetricTracker
+from src.utils.data_utils import batch_transform_trajs_to_global_frame
 from src.utils.eval import log_images  # TODO maybe add this to logger?
 from src.utils.eval import image_log_name, mask_pred_for_plot, plot_vis_kwargs
 from src.visualization.viz import plot_simulator_state
-from utils.data_utils import batch_transform_trajs_to_global_frame
 
 
 class BaseTrainerDebug(L.LightningModule):

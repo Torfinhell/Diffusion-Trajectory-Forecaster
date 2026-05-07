@@ -9,7 +9,7 @@ def masked_abs_mean(values, weights):
     return (jnp.abs(values) * weights).sum() / jnp.maximum(weights.sum(), 1.0)
 
 
-class MSELossXY(eqx.nn.Module):
+class MSELossXY(eqx.Module):
     """Weighted MSE diffusion training loss."""
 
     def __init__(self):

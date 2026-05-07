@@ -1,1 +1,1 @@
-from losses.mse_loss_xy import MSELossXY
+from src.losses.mse_loss_xy import MSELossXY
