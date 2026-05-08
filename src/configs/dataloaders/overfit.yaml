@@ -1,0 +1,25 @@
+train:
+  _target_: torch.utils.data.DataLoader
+  batch_size: 1
+  num_workers: 1
+  persistent_workers: true
+  multiprocessing_context: spawn
+  pin_memory: true
+  shuffle: False
+  drop_last: True
+  chunk_sampler:
+    enabled: False
+
+val:
+  _target_: torch.utils.data.DataLoader
+  batch_size: 1
+  num_workers: 0
+  pin_memory: True
+  shuffle: False
+
+test:
+  _target_: torch.utils.data.DataLoader
+  batch_size: 1
+  num_workers: 0
+  pin_memory: True
+  shuffle: False

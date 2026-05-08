@@ -91,6 +91,22 @@ class Basetreainer(L.LightningModule):
     def configure_optimizers(self):
         return []
 
+    def _normalize_x0(self, x, batch):
+        x = jnp.asarray(x)
+        mean = jnp.asarray(batch["x0_mean"], dtype=x.dtype)[None, None, :]
+        std = jnp.sqrt(
+            jnp.maximum(jnp.asarray(batch["x0_var"], dtype=x.dtype), 1e-6)
+        )[None, None, :]
+        return (x - mean) / std
+
+    def _denormalize_x0(self, x, batch):
+        x = jnp.asarray(x)
+        mean = jnp.asarray(batch["x0_mean"], dtype=x.dtype)[None, None, :]
+        std = jnp.sqrt(
+            jnp.maximum(jnp.asarray(batch["x0_var"], dtype=x.dtype), 1e-6)
+        )[None, None, :]
+        return x * std + mean
+
     def _update_metrics_for_batch(self, metrics, batch):
         gt_xy_batch = batch["agent_future"][:, ..., :2]
         future_valid_batch = batch["agent_future_valid"]
@@ -135,8 +151,9 @@ class Basetreainer(L.LightningModule):
         def scan_step(x_t, inputs):
             timestep, step_key = inputs
             timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
+            timestep_f = jnp.asarray(timestep, dtype=timestep.dtype) / jnp.maximum(diffusion_sampler.num_steps - 1, 1)
             model_output = model(
-                jnp.asarray(timestep, dtype=x_t.dtype),
+                timestep_f,
                 x_t,
                 batch,
             )
@@ -150,8 +167,8 @@ class Basetreainer(L.LightningModule):
 
         x, path = jax.lax.scan(scan_step, x, (timesteps, step_keys[1:]))
         if save_full:
-            return path
-        return x
+            return self._denormalize_x0(path, batch)
+        return self._denormalize_x0(x, batch)
 
     def sample_batch_sol(
         self,
@@ -206,7 +223,57 @@ class Basetreainer(L.LightningModule):
                 images,
             )
 
+    def _log_timestep_probe(self, batch):
+        batch_size = batch["agent_future"].shape[0]
+        gt_xy_batch = batch["agent_future"][..., :2]
+        self.sample_key, key = jr.split(self.sample_key)
+        probe_keys = jr.split(key, batch_size)
+        probe_batch = {k: v for k, v in batch.items() if k != "scenario"}
+        t_hi = min(50, self.diffusion_sampler.num_steps - 1)
+        timestep0 = jnp.array(0, dtype=jnp.int32)
+
+        def probe_one(sample_key, sample_batch, gt_xy):
+            noise = jr.normal(sample_key, gt_xy.shape)
+            x_t = self.diffusion_sampler.add_noise(
+                self._normalize_x0(gt_xy, sample_batch), noise, timestep0
+            )
+            t0 = jnp.array(0.0, dtype=x_t.dtype)
+            t1 = jnp.array(t_hi, dtype=x_t.dtype) / jnp.maximum(
+                self.diffusion_sampler.num_steps - 1, 1
+            )
+            pred_t0 = self._denormalize_x0(self.model(t0, x_t, sample_batch), sample_batch)
+            pred_t1 = self._denormalize_x0(self.model(t1, x_t, sample_batch), sample_batch)
+            return jnp.mean(jnp.abs(pred_t0 - pred_t1))
+
+        abs_diff = jax.vmap(probe_one)(probe_keys, probe_batch, gt_xy_batch).mean()
+        self.log(
+            "val/timestep_probe_abs_diff",
+            float(jnp.asarray(abs_diff)),
+            prog_bar=False,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+
     def training_step(self, batch, batch_idx):
+        # Run extra inner optimization steps before the logged step.
+        # Each inner step uses a fresh random key → different timestep sampled.
+        inner_steps = max(1, int(self.trainer_cfg.get("inner_steps", 1)))
+        for _ in range(inner_steps - 1):
+            step_key, self.train_key = jr.split(self.train_key)
+            step_out = self.make_step(
+                model=self.model,
+                diffusion_sampler=self.diffusion_sampler,
+                loss_fn=self.loss_fn,
+                batch=batch,
+                key=step_key,
+                train=True,
+                opt_state=self.opt_state,
+                opt_update=self.optim.update,
+            )
+            self.model = step_out["model"]
+            self.opt_state = step_out["opt_state"]
+            self.global_step_ += 1
         self._step(batch, "train")
         metric_every = max(1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1)))
         should_run_metrics = (
@@ -255,6 +322,7 @@ class Basetreainer(L.LightningModule):
                 on_epoch=True,
                 batch_size=batch["agent_future"].shape[0],
             )
+            self._log_timestep_probe(batch)
             self._log_validation_visualizations(batch, sampled_trajs)
         return loss
 
@@ -292,9 +360,11 @@ class Basetreainer(L.LightningModule):
             log_metrics[f"train/param_norm"] = float(
                 jnp.asarray(step_out["param_norm"])
             )
+        _probe_keys = {"ade_at_t0", "mse_at_t0"}
         if step_out["train_stats"] is not None:
             for stat_key, stat_value in step_out["train_stats"].items():
-                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
+                if stat_key not in _probe_keys:
+                    log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
 
         self.log_dict(
             log_metrics,
@@ -303,6 +373,22 @@ class Basetreainer(L.LightningModule):
             on_epoch=False,
             batch_size=batch["agent_future"].shape[0],
         )
+
+        # Surface key overfit probes on progress bar (separate to control prog_bar)
+        if step_out["train_stats"] is not None:
+            probe_dict = {
+                f"{kind}/{k}": float(jnp.asarray(step_out["train_stats"][k]))
+                for k in _probe_keys
+                if k in step_out["train_stats"]
+            }
+            if probe_dict:
+                self.log_dict(
+                    probe_dict,
+                    prog_bar=True,
+                    on_step=True,
+                    on_epoch=True,
+                    batch_size=batch["agent_future"].shape[0],
+                )
 
         if is_train:
             self.global_step_ += 1
