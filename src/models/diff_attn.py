@@ -198,7 +198,7 @@ class RelationEncoder(eqx.Module):
         return edge_emb.sum(axis=1) / denom
 
 
-class SceneEncoder(eqx.Module):
+class AgentEncoder(eqx.Module):
     pos_emb_type: Literal["rope", "lookup", "None"]
     rnn_time: eqx.nn.MultiheadAttention | eqx.nn.LSTMCell
     sa_agents: eqx.nn.MultiheadAttention
@@ -324,8 +324,8 @@ class SceneEncoder(eqx.Module):
         return jax.vmap(self.mlp)(x).reshape(a, -1)
 
 
-class Encoder(eqx.Module):
-    agent_encoder: SceneEncoder
+class SceneEncoder(eqx.Module):
+    agent_encoder: AgentEncoder
     map_encoder: MapEncoder | None
     traffic_light_encoder: TrafficLightEncoder | None
     relation_encoder: RelationEncoder | None
@@ -366,7 +366,7 @@ class Encoder(eqx.Module):
             if traffic_light_embed_dim is None
             else int(traffic_light_embed_dim)
         )
-        self.agent_encoder = SceneEncoder(**agent_encoder_args, key=agent_key)
+        self.agent_encoder = AgentEncoder(**agent_encoder_args, key=agent_key)
         self.extract_map = bool(extract_map)
         self.extract_traffic = bool(extract_traffic)
         self.extract_relations = bool(extract_relations)
@@ -493,7 +493,7 @@ class Encoder(eqx.Module):
 
 
 class DiffAttention(eqx.Module):
-    encoder: Encoder
+    encoder: SceneEncoder
     out_shape: tuple[int, ...]
     ca_mlp_layers: list[AttentionMLP]
     sa_mlp_layers: list[AttentionMLP]
@@ -516,7 +516,7 @@ class DiffAttention(eqx.Module):
         extract_relations: bool = True,
     ):
         se_key, ca_mlp_key, sa_mlp_key, out_key, future_key, past_key = jr.split(key, 6)
-        self.encoder = Encoder(
+        self.encoder = SceneEncoder(
             agent_encoder_args=se_args,
             map_embed_dim=se_args["out_dim"],
             traffic_light_embed_dim=se_args["out_dim"],
