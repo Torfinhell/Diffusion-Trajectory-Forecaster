@@ -508,15 +508,4 @@ class Dataset:
             dataset = dataset.shuffle(int(split_cfg.get("shuffle_buffer", 1000)))
 
         dataset = dataset.map(cls._decode_sample_fields)
-        total_samples = int(metadata.get("num_samples", 0))
-        max_samples = split_cfg.get("max_samples", None)
-        if max_samples is not None:
-            max_samples = int(max_samples)
-            if max_samples > 0:
-                dataset = itertools.islice(dataset, max_samples)
-                total_samples = (
-                    min(total_samples, max_samples)
-                    if total_samples > 0
-                    else max_samples
-                )
-        return SizedIterableDataset(dataset, total_samples)
+        return SizedIterableDataset(dataset, int(metadata.get("num_samples", 0)))
