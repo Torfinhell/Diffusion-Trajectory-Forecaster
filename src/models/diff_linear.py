@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 
-class DiffDenoiser(eqx.Module):
+class DiffLinear(eqx.Module):
     fc1: eqx.nn.Linear
     fc2: eqx.nn.Linear
     fc_out: eqx.nn.Linear
@@ -30,7 +30,7 @@ class DiffDenoiser(eqx.Module):
         cond = batch_kwargs.get("agent_past", batch_kwargs.get("cond", None))
         if cond is None:
             raise ValueError(
-                "DiffDenoiser expects `agent_past` (or `cond`) in batch kwargs."
+                "DiffLinear expects `agent_past` (or `cond`) in batch kwargs."
             )
         x = jnp.concatenate(
             [x_t.reshape(-1), cond.reshape(-1), jnp.atleast_1d(t_noise)], axis=0

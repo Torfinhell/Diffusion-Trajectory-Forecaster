@@ -1,4 +1,4 @@
-_target_: src.models.DiffDenoiser
+_target_: src.models.DiffLinear
 hid_dim: 256
 input_shape: [32, 11, 9]
 output_shape: [32, 80, 2]
