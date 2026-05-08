@@ -1,4 +1,7 @@
 # @package _global_
+extract_map: true
+extract_traffic: true
+extract_relations: true
 data:
   train:
     dvc_file: "data/small_base_v2_no_scenes.dvc"
@@ -16,6 +19,9 @@ data:
       preprocessing:
         current_index: 10
         use_full_agent_info: true
+        extract_map: ${extract_map}
+        extract_traffic: ${extract_traffic}
+        extract_relations: ${extract_relations}
   val:
     dvc_file: "data/small_base_v2_no_scenes.dvc"
     processed_path: "data/small_base_v2_no_scenes/val_small_base_v2_no_scenes.wds"
@@ -32,6 +38,9 @@ data:
       preprocessing:
         current_index: 10
         use_full_agent_info: true
+        extract_map: ${extract_map}
+        extract_traffic: ${extract_traffic}
+        extract_relations: ${extract_relations}
   test:
     dvc_file: "data/small_base_v2_no_scenes.dvc"
     processed_path: "data/small_base_v2_no_scenes/test_small_base_v2_no_scenes.wds"
@@ -48,3 +57,6 @@ data:
       preprocessing:
         current_index: 10
         use_full_agent_info: true
+        extract_map: ${extract_map}
+        extract_traffic: ${extract_traffic}
+        extract_relations: ${extract_relations}

@@ -58,13 +58,14 @@ class MSELoss(eqx.Module):
         weights = jnp.broadcast_to(weights, err.shape)
         weighted_element_count = jnp.ones_like(err) * weights
         loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
-        valid_weights = jnp.asarray(agent_future_valid, dtype=gt_xy.dtype)
-        if not debug:
-            return loss
-        stats = {
-            "noisy_abs_mean": masked_abs_mean(y, valid_weights),
-            "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
-            "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
-            "valid_ratio": jnp.mean(valid_weights),
-        }
-        return loss, stats
+        loss_dict = {"loss": loss}
+        if debug:
+            valid_weights = jnp.asarray(agent_future_valid, dtype=gt_xy.dtype)
+            stats = {
+                "noisy_abs_mean": masked_abs_mean(y, valid_weights),
+                "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
+                "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
+                "valid_ratio": jnp.mean(valid_weights),
+            }
+            loss_dict.update(stats)
+        return loss_dict

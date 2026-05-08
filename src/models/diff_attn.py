@@ -326,11 +326,14 @@ class SceneEncoder(eqx.Module):
 
 class Encoder(eqx.Module):
     agent_encoder: SceneEncoder
-    map_encoder: MapEncoder
-    traffic_light_encoder: TrafficLightEncoder
-    relation_encoder: RelationEncoder
-    relation_proj: eqx.nn.Linear
+    map_encoder: MapEncoder | None
+    traffic_light_encoder: TrafficLightEncoder | None
+    relation_encoder: RelationEncoder | None
+    relation_proj: eqx.nn.Linear | None
     transformer_encoder: TransformerEncoder
+    extract_map: bool
+    extract_traffic: bool
+    extract_relations: bool
 
     def __init__(
         self,
@@ -343,6 +346,9 @@ class Encoder(eqx.Module):
         transformer_mlp_dim: int = 64,
         transformer_num_mlp_layers: int = 1,
         transformer_drop_attn: float = 0.1,
+        extract_map: bool = True,
+        extract_traffic: bool = True,
+        extract_relations: bool = True,
         key=None,
     ):
         (
@@ -361,28 +367,41 @@ class Encoder(eqx.Module):
             else int(traffic_light_embed_dim)
         )
         self.agent_encoder = SceneEncoder(**agent_encoder_args, key=agent_key)
-        self.map_encoder = MapEncoder(map_embed_dim, map_hidden_dim, key=map_key)
-        self.traffic_light_encoder = TrafficLightEncoder(
-            traffic_light_embed_dim, key=traffic_key
+        self.extract_map = bool(extract_map)
+        self.extract_traffic = bool(extract_traffic)
+        self.extract_relations = bool(extract_relations)
+        self.map_encoder = (
+            MapEncoder(map_embed_dim, map_hidden_dim, key=map_key)
+            if self.extract_map
+            else None
         )
-        self.relation_encoder = RelationEncoder(
-            hidden_dim=context_dim, key=relation_key
+        self.traffic_light_encoder = (
+            TrafficLightEncoder(traffic_light_embed_dim, key=traffic_key)
+            if self.extract_traffic
+            else None
         )
-        self.relation_proj = eqx.nn.Linear(
-            in_features=context_dim,
-            out_features=context_dim,
-            key=relation_proj_key,
-        )
-        self.relation_proj = eqx.tree_at(
-            lambda layer: layer.weight,
-            self.relation_proj,
-            jnp.zeros_like(self.relation_proj.weight),
-        )
-        self.relation_proj = eqx.tree_at(
-            lambda layer: layer.bias,
-            self.relation_proj,
-            jnp.zeros_like(self.relation_proj.bias),
-        )
+        if self.extract_relations:
+            self.relation_encoder = RelationEncoder(
+                hidden_dim=context_dim, key=relation_key
+            )
+            self.relation_proj = eqx.nn.Linear(
+                in_features=context_dim,
+                out_features=context_dim,
+                key=relation_proj_key,
+            )
+            self.relation_proj = eqx.tree_at(
+                lambda layer: layer.weight,
+                self.relation_proj,
+                jnp.zeros_like(self.relation_proj.weight),
+            )
+            self.relation_proj = eqx.tree_at(
+                lambda layer: layer.bias,
+                self.relation_proj,
+                jnp.zeros_like(self.relation_proj.bias),
+            )
+        else:
+            self.relation_encoder = None
+            self.relation_proj = None
         self.transformer_encoder = TransformerEncoder(
             layers=transformer_layers,
             attn_dim=context_dim,
@@ -396,33 +415,66 @@ class Encoder(eqx.Module):
     def __call__(
         self,
         agent_past,
-        polylines,  # local
-        polylines_valid,
-        traffic_light_points,
-        relations,
-        agents_valid,
-        agents_types,
+        polylines=None,  # local
+        polylines_valid=None,
+        traffic_light_points=None,
+        relations=None,
+        agents_valid=None,
+        agents_types=None,
         **kwargs,
     ):
+        if agents_valid is None:
+            raise ValueError("`agents_valid` is required for encoder context masking.")
         encoded_agents = self.agent_encoder(agent_past)
-        encoded_map_lanes = self.map_encoder(polylines)
-        encoded_traffic_lights = self.traffic_light_encoder(traffic_light_points)
-
         agents_mask = ~agents_valid
-        maps_mask = polylines_valid <= 0
-        traffic_lights_mask = jnp.all(traffic_light_points == 0, axis=-1)
-        context_mask = jnp.concatenate(
-            [agents_mask, maps_mask, traffic_lights_mask], axis=0
-        )
-        context_tokens = jnp.concatenate(
-            [encoded_agents, encoded_map_lanes, encoded_traffic_lights], axis=0
-        )
-        pair_valid = (~context_mask)[:, None] & (~context_mask)[None, :]
-        relation_context = self.relation_encoder(relations, pair_valid)
-        relation_context = jax.vmap(self.relation_proj)(relation_context)
-        context_tokens = jnp.where(
-            context_mask[:, None], 0.0, context_tokens + relation_context
-        )
+        context_tokens_list = [encoded_agents]
+        context_mask_list = [agents_mask]
+
+        if self.extract_map and self.map_encoder is not None:
+            if polylines is None or polylines_valid is None:
+                raise ValueError(
+                    "Map extraction is enabled but `polylines`/`polylines_valid` are missing."
+                )
+            encoded_map_lanes = self.map_encoder(polylines)
+            maps_mask = polylines_valid <= 0
+            context_tokens_list.append(encoded_map_lanes)
+            context_mask_list.append(maps_mask)
+        else:
+            maps_mask = jnp.ones((0,), dtype=bool)
+
+        if self.extract_traffic and self.traffic_light_encoder is not None:
+            if traffic_light_points is None:
+                raise ValueError(
+                    "Traffic extraction is enabled but `traffic_light_points` are missing."
+                )
+            encoded_traffic_lights = self.traffic_light_encoder(traffic_light_points)
+            traffic_lights_mask = jnp.all(traffic_light_points == 0, axis=-1)
+            context_tokens_list.append(encoded_traffic_lights)
+            context_mask_list.append(traffic_lights_mask)
+        else:
+            traffic_lights_mask = jnp.ones((0,), dtype=bool)
+
+        context_tokens = jnp.concatenate(context_tokens_list, axis=0)
+        context_mask = jnp.concatenate(context_mask_list, axis=0)
+        if (
+            self.extract_relations
+            and self.relation_encoder is not None
+            and self.relation_proj is not None
+        ):
+            if relations is None:
+                raise ValueError(
+                    "Relation extraction is enabled but `relations` are missing."
+                )
+            context_size = context_tokens.shape[0]
+            relations = relations[:context_size, :context_size]
+            pair_valid = (~context_mask)[:, None] & (~context_mask)[None, :]
+            relation_context = self.relation_encoder(relations, pair_valid)
+            relation_context = jax.vmap(self.relation_proj)(relation_context)
+            context_tokens = jnp.where(
+                context_mask[:, None], 0.0, context_tokens + relation_context
+            )
+        else:
+            context_tokens = jnp.where(context_mask[:, None], 0.0, context_tokens)
         encodings = self.transformer_encoder(
             context_tokens,
             context_mask,
@@ -459,6 +511,9 @@ class DiffAttention(eqx.Module):
         out_shape: list[int],
         final_out_dim: int,
         key,
+        extract_map: bool = True,
+        extract_traffic: bool = True,
+        extract_relations: bool = True,
     ):
         se_key, ca_mlp_key, sa_mlp_key, out_key, future_key, past_key = jr.split(key, 6)
         self.encoder = Encoder(
@@ -470,6 +525,9 @@ class DiffAttention(eqx.Module):
             transformer_mlp_dim=camlp_args["mlp_dim"],
             transformer_num_mlp_layers=camlp_args["num_mlp_layers"],
             transformer_drop_attn=camlp_args["drop_attn"],
+            extract_map=extract_map,
+            extract_traffic=extract_traffic,
+            extract_relations=extract_relations,
             key=se_key,
         )
         sa_keys = jr.split(sa_mlp_key, num_sa_mlp)

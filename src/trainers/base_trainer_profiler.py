@@ -125,30 +125,33 @@ class BaseProfilerDebug(L.LightningModule):
         opt_state=None,
         opt_update=None,
     ):
-        # TODO how to sample steps?
         if train:
-            grad_fn = eqx.filter_value_and_grad(BaseProfilerDebug.batch_loss_fn)
-            loss, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
+            grad_fn = eqx.filter_value_and_grad(
+                BaseProfilerDebug.batch_loss_fn, has_aux=True
+            )
+            loss_dict, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss = BaseProfilerDebug.batch_loss_fn(
+            loss_dict = BaseProfilerDebug.batch_loss_fn(
                 model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = None
             update_norm = None
             param_norm = None
-        return {
-            "loss": loss,
+        step_out = {
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
-            "model": model,
-            "opt_state": opt_state,
+            **loss_dict,
         }
+        if train:
+            step_out["model"] = model
+            step_out["opt_state"] = opt_state
+        return step_out
 
     @staticmethod
     @eqx.filter_jit
@@ -157,7 +160,10 @@ class BaseProfilerDebug(L.LightningModule):
         batch_size = batch["agent_future"].shape[0]
         loss_keys = jr.split(key, batch_size)
         sample_loss_fn = lambda sample, sample_key: loss_fn(
-            model, diffusion_sampler, **sample, key=sample_key
+            model, diffusion_sampler, **sample, key=sample_key, debug=False
         )
-        losses = jax.vmap(sample_loss_fn)(batch, loss_keys)
-        return jnp.mean(losses)
+        loss_dict_per_sample = jax.vmap(sample_loss_fn)(batch, loss_keys)
+        mean_loss_dict = jax.tree.map(
+            lambda x: jnp.mean(x, axis=0), loss_dict_per_sample
+        )
+        return mean_loss_dict

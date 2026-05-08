@@ -283,21 +283,14 @@ class BaseTrainerDebug(L.LightningModule):
             self.model = step_out["model"]
             self.opt_state = step_out["opt_state"]
 
-        log_metrics = {f"{kind}/loss_step": float(jnp.asarray(step_out["loss"]))}
-        if is_train:
-            log_metrics[f"train/grad_norm"] = float(jnp.asarray(step_out["grad_norm"]))
-            log_metrics[f"train/update_norm"] = float(
-                jnp.asarray(step_out["update_norm"])
-            )
-            log_metrics[f"train/param_norm"] = float(
-                jnp.asarray(step_out["param_norm"])
-            )
-        if step_out["train_stats"] is not None:
-            for stat_key, stat_value in step_out["train_stats"].items():
-                log_metrics[f"{kind}/{stat_key}"] = float(jnp.asarray(stat_value))
+        log_output = {
+            f"{kind}/{key}": float(jnp.asarray(value))
+            for key, value in step_out.items()
+            if key not in {"model", "opt_state"} and value is not None
+        }
 
         self.log_dict(
-            log_metrics,
+            log_output,
             prog_bar=False,
             on_step=True,
             on_epoch=False,
@@ -325,33 +318,30 @@ class BaseTrainerDebug(L.LightningModule):
             grad_fn = eqx.filter_value_and_grad(
                 BaseTrainerDebug.batch_loss_fn, has_aux=True
             )
-            (loss, train_stats), grads = grad_fn(
-                model, diffusion_sampler, loss_fn, batch, key
-            )
+            loss_dict, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss, train_stats = BaseTrainerDebug.batch_loss_fn(
+            loss_dict = BaseTrainerDebug.batch_loss_fn(
                 model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = None
             update_norm = None
             param_norm = None
 
-        # key = jr.split(key, 1)[0]
-        return {
-            "loss": loss,
-            "train_stats": train_stats,
+        step_out = {
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
-            "model": model,
-            # "key": key,
-            "opt_state": opt_state,
+            **loss_dict,
         }
+        if train:
+            step_out["model"] = model
+            step_out["opt_state"] = opt_state
+        return step_out
 
     @eqx.filter_jit
     def batch_loss_fn(model, diffusion_sampler, loss_fn, batch, key):
@@ -364,10 +354,12 @@ class BaseTrainerDebug(L.LightningModule):
                 model=model,
                 diffusion_sampler=diffusion_sampler,
                 key=single_key,
-                with_stats=True,
+                debug=True,
                 **single_sample_dict,
             )
 
-        losses, stats = jax.vmap(mapped_fn)(batch, loss_keys)
-        mean_stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
-        return jnp.mean(losses), mean_stats
+        loss_dict_per_sample = jax.vmap(mapped_fn)(batch, loss_keys)
+        mean_loss_dict = jax.tree.map(
+            lambda x: jnp.mean(x, axis=0), loss_dict_per_sample
+        )
+        return mean_loss_dict

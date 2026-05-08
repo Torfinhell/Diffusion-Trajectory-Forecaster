@@ -329,8 +329,9 @@ def calculate_relations(
         "use_full_agent_info",
         "max_polylines",
         "num_points_polyline",
-        "use_log",
-        "remove_history",
+        "extract_map",
+        "extract_traffic",
+        "extract_relations",
     ]
 )
 def data_process_scenarios(
@@ -339,26 +340,46 @@ def data_process_scenarios(
     use_full_agent_info=True,
     max_polylines=256,
     num_points_polyline=30,
-    use_log=True,
-    remove_history=False,
+    extract_map=True,
+    extract_traffic=True,
+    extract_relations=True,
 ):
-    traffic_info = data_process_traffic_light(scenarios, current_index=current_index)
+    assert not extract_relations or (
+        extract_map and extract_traffic
+    ), "extract_relations=True requires extract_map=True and extract_traffic=True."
+    assert (
+        not extract_map or extract_traffic
+    ), "extract_map=True requires extract_traffic=True."
+
+    traffic_info = {}
+    if extract_traffic:
+        traffic_info = data_process_traffic_light(
+            scenarios, current_index=current_index
+        )
     agents_info = data_process_agent(
         scenarios, current_index=current_index, use_full_agent_info=use_full_agent_info
     )
-    map_info = data_process_map(
-        scenarios,
-        traffic_info,
-        agents_info,
-        max_polylines=max_polylines,
-        num_points_polyline=num_points_polyline,
-    )
-    relations_info = calculate_relations(agents_info, map_info, traffic_info)
+    map_info = {}
+    if extract_map:
+        map_info = data_process_map(
+            scenarios,
+            traffic_info,
+            agents_info,
+            max_polylines=max_polylines,
+            num_points_polyline=num_points_polyline,
+        )
+
+    relations_info = {}
+    if extract_relations:
+        relations_info = calculate_relations(agents_info, map_info, traffic_info)
     data_dict = {}
-    data_dict.update(traffic_info)
     data_dict.update(agents_info)
-    data_dict.update(map_info)
-    data_dict.update(relations_info)
+    if extract_traffic:
+        data_dict.update(traffic_info)
+    if extract_map:
+        data_dict.update(map_info)
+    if extract_relations:
+        data_dict.update(relations_info)
     return data_dict
 
 
@@ -368,8 +389,9 @@ def data_process_scenarios(
         "use_full_agent_info",
         "max_polylines",
         "num_points_polyline",
-        "use_log",
-        "remove_history",
+        "extract_map",
+        "extract_traffic",
+        "extract_relations",
     ]
 )
 def data_process_scenarios_batch(
@@ -378,8 +400,9 @@ def data_process_scenarios_batch(
     use_full_agent_info=True,
     max_polylines=256,
     num_points_polyline=30,
-    use_log=True,
-    remove_history=False,
+    extract_map=True,
+    extract_traffic=True,
+    extract_relations=True,
 ):
     return jax.vmap(
         lambda scenario: data_process_scenarios(
@@ -388,7 +411,8 @@ def data_process_scenarios_batch(
             use_full_agent_info=use_full_agent_info,
             max_polylines=max_polylines,
             num_points_polyline=num_points_polyline,
-            use_log=use_log,
-            remove_history=remove_history,
+            extract_map=extract_map,
+            extract_traffic=extract_traffic,
+            extract_relations=extract_relations,
         )
     )(scenarios)
