@@ -89,15 +89,8 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
     cfg.trainer.num_epochs = int(tune_cfg.trainer.num_epochs)
     cfg.trainer.train_epoch_len = tune_cfg.trainer.train_epoch_len
     cfg.trainer.val_epoch_len = tune_cfg.trainer.val_epoch_len
-    cfg.trainer.val_metric_every_n_epochs = int(
-        tune_cfg.trainer.val_metric_every_n_epochs
-    )
-    cfg.trainer.train_metric_every_n_epochs = int(
-        tune_cfg.trainer.train_metric_every_n_epochs
-    )
     cfg.trainer.enable_profiler = False
     cfg.trainer.enable_jax_profiler = False
-    cfg.trainer.load_best_checkpoint = False
     cfg.trainer.logging = "disable"
     cfg.visual.enable_visualization = False
     cfg.visual.enable_train_visualization = False
@@ -107,13 +100,15 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
 
 def objective(tune_cfg, trial: optuna.Trial) -> float:
     hparams = build_hparams(tune_cfg, trial)
-    dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
+    dm = DiffusionTrackerDataModule(
+        hparams.data,
+        hparams.dataloaders,
+    )
     dm.setup("fit")
     resolve_scheduler_decay_steps(hparams, dm)
 
     diff_model = BaseTrainerDebug(
         seed=hparams.trainer.seed,
-        load_best_checkpoint=hparams.trainer.load_best_checkpoint,
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
         model=hparams.model,
@@ -136,11 +131,9 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=bool(tune_cfg.runtime.show_progress),
-        log_every_n_steps=hparams.trainer.log_every_n_steps,
         limit_train_batches=hparams.trainer.train_epoch_len,
         limit_val_batches=hparams.trainer.val_epoch_len,
         check_val_every_n_epoch=hparams.trainer.check_val_every_n_epoch,
-        reload_dataloaders_every_n_epochs=hparams.trainer.generate_every_epoch,
         num_sanity_val_steps=0,
     )
 

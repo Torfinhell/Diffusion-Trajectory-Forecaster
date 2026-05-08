@@ -1,4 +1,5 @@
 import dataclasses
+import itertools
 import json
 import logging
 import pickle
@@ -183,7 +184,9 @@ class Dataset:
             for idx in range(batch_size)
         ]
 
-    def _process_states_batch(self, states_batch, extract_scene, preprocess_kwargs, split=None):
+    def _process_states_batch(
+        self, states_batch, extract_scene, preprocess_kwargs, split=None
+    ):
         batched_states = self._stack_states_batch(states_batch)
         processed_batch = data_process_scenarios_batch(
             batched_states,
@@ -505,4 +508,15 @@ class Dataset:
             dataset = dataset.shuffle(int(split_cfg.get("shuffle_buffer", 1000)))
 
         dataset = dataset.map(cls._decode_sample_fields)
-        return SizedIterableDataset(dataset, int(metadata.get("num_samples", 0)))
+        total_samples = int(metadata.get("num_samples", 0))
+        max_samples = split_cfg.get("max_samples", None)
+        if max_samples is not None:
+            max_samples = int(max_samples)
+            if max_samples > 0:
+                dataset = itertools.islice(dataset, max_samples)
+                total_samples = (
+                    min(total_samples, max_samples)
+                    if total_samples > 0
+                    else max_samples
+                )
+        return SizedIterableDataset(dataset, total_samples)

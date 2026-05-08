@@ -70,10 +70,13 @@ class BaseProfilerDebug(L.LightningModule):
     def training_step(self, batch, batch_idx):
         if self.start_step <= self.global_step_ <= self.stop_step:
             with jax.profiler.trace(self.log_dir / "_step/train"):
-                loss = self._step(batch, "train")
+                with jax.profiler.StepTraceAnnotation(
+                    "train", step_num=self.global_step_
+                ):
+                    self._step(batch, "train")
         else:
-            loss = self._step(batch, "train")
-        return loss
+            self._step(batch, "train")
+        return None
 
     def validation_step(self, batch, batch_idx):
         with jax.profiler.trace(self.log_dir / "_step/val"):
@@ -124,9 +127,7 @@ class BaseProfilerDebug(L.LightningModule):
     ):
         # TODO how to sample steps?
         if train:
-            grad_fn = eqx.filter_value_and_grad(
-                BaseProfilerDebug.batch_loss_fn, has_aux=True
-            )
+            grad_fn = eqx.filter_value_and_grad(BaseProfilerDebug.batch_loss_fn)
             loss, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)

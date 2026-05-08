@@ -22,7 +22,10 @@ def main(cfg) -> None:
     if logger is not None:
         log_run_metadata(logger, hparams)
 
-    dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
+    dm = DiffusionTrackerDataModule(
+        hparams.data,
+        hparams.dataloaders,
+    )
     dm.setup("fit")
     resolve_scheduler_decay_steps(hparams, dm)
 
@@ -39,7 +42,6 @@ def main(cfg) -> None:
     jax_profiler_dir = f"./clearml/{logger_name}/jax_profiler"
     diff_trainer_kwargs = dict(
         seed=hparams.trainer.seed,
-        load_best_checkpoint=hparams.trainer.load_best_checkpoint,
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
         model=hparams.model,
@@ -63,12 +65,10 @@ def main(cfg) -> None:
         max_epochs=hparams.trainer.num_epochs,
         logger=logger,
         callbacks=callbacks,
-        log_every_n_steps=hparams.trainer.log_every_n_steps,
         enable_progress_bar=True,
         limit_train_batches=hparams.trainer.train_epoch_len,
         limit_val_batches=hparams.trainer.val_epoch_len,
         check_val_every_n_epoch=hparams.trainer.check_val_every_n_epoch,
-        reload_dataloaders_every_n_epochs=cfg.trainer.generate_every_epoch,
         profiler=profiler,
     )
 

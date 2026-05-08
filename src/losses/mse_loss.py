@@ -9,11 +9,16 @@ def masked_abs_mean(values, weights):
     return (jnp.abs(values) * weights).sum() / jnp.maximum(weights.sum(), 1.0)
 
 
-class MSELossXY(eqx.Module):
+class MSELoss(eqx.Module):
     """Weighted MSE diffusion training loss."""
 
-    def __init__(self):
+    coord_scale: int
+    path_type: str
+
+    def __init__(self, coord_scale, path_type):
         super().__init__()
+        self.coord_scale = coord_scale
+        self.path_type = path_type
 
     def __call__(
         self,
@@ -26,9 +31,12 @@ class MSELossXY(eqx.Module):
         debug=False,
         **kwargs,
     ):
-        gt_xy = agent_future[
-            ..., :2
-        ]  # TODO predict not x y but maybe all together some stuff
+        if self.path_type == "xy":
+            gt_xy = agent_future[..., :2] / self.coord_scale
+        else:
+            raise NotImplementedError(
+                "Loss for this type of path_type is not Implemented"
+            )
         timestep_key, noise_key = jr.split(key)
         timestep = jr.randint(
             timestep_key, shape=(), minval=0, maxval=diffusion_sampler.num_steps

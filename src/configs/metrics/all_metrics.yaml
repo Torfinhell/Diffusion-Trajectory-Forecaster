@@ -1,10 +1,6 @@
 train:
-  - _target_: src.metrics.AdeMetric
-    name: ADE
-  - _target_: src.metrics.FdeMetric
-    name: FDE
+  _target_: src.metrics.MetricFnCollection
+  metrics: [ade, fde]
 val:
-  - _target_: src.metrics.AdeMetric
-    name: ADE
-  - _target_: src.metrics.FdeMetric
-    name: FDE
+  _target_: src.metrics.MetricFnCollection
+  metrics: [ade, fde]

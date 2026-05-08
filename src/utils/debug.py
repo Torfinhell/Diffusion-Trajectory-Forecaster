@@ -1,6 +1,8 @@
 import jax.numpy as jnp
 import jax.random as jr
 
+from src.metrics import ade
+
 
 def compute_one_step_denoise_ade(model, batch):
     sample_idx = 0
@@ -18,9 +20,7 @@ def compute_one_step_denoise_ade(model, batch):
     agents_coeffs = jnp.asarray(batch["agents_coeffs"][sample_idx])
     if pred.ndim + 1 == gt_xy.ndim and gt_xy.shape[0] == 1:
         gt_xy = jnp.squeeze(gt_xy, axis=0)
-    ade_metric = model.metrics_train.metrics[0].__class__(name="tmp_ADE")
-    ade_metric.update(pred, gt_xy, agents_coeffs, future_valid)
-    return float(jnp.asarray(ade_metric.compute()))
+    return float(jnp.asarray(ade(pred, gt_xy, agents_coeffs, future_valid)))
 
 
 def debug_denoiser_scale(model, batch):

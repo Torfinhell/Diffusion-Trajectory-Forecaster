@@ -26,11 +26,9 @@ dependencies = [
     "nvidia-cudnn-cu12==9.20.0.48",
     "clearml>=1.16.5",
     "waymo-waymax",
-    "tensorboard>=2.20.0",
     "setuptools<81",
-    "tensorboard-plugin-profile<2.20",
     "pandas>=3.0.2",
-    "xprof>=2.22.2",
+    "xprof-nightly>=2.23.2a20260428",
 ]
 
 [tool.uv.sources]

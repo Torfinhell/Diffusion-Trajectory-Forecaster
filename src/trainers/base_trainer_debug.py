@@ -8,10 +8,8 @@ import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
 
-from src.metrics import MetricCollection, MetricTracker
+from src.metrics import MetricFnCollection
 from src.utils.data_utils import batch_transform_trajs_to_global_frame
-from src.utils.eval import log_images  # TODO maybe add this to logger?
-from src.utils.eval import image_log_name, mask_pred_for_plot, plot_vis_kwargs
 from src.visualization.viz import plot_simulator_state
 
 
@@ -21,7 +19,6 @@ class BaseTrainerDebug(L.LightningModule):
     def __init__(
         self,
         seed,
-        load_best_checkpoint,
         cfg_metrics,
         vis_cfg,
         model,
@@ -47,14 +44,19 @@ class BaseTrainerDebug(L.LightningModule):
         self.grad_clip = None if grad_clip is None else float(grad_clip)
         if self.grad_clip is not None and self.grad_clip <= 0:
             self.grad_clip = None
-        self.load_best_checkpoint_flag = load_best_checkpoint
         self.samples = 10
         self.global_step_ = 0
-        self.metrics_train = MetricCollection(
-            [instantiate(m) for m in self.metrics.train]
+        self.metrics_train = (
+            instantiate(self.metrics.train)
+            if getattr(self.metrics, "train", None)
+            else None
         )
-        self.metrics_val = MetricCollection([instantiate(m) for m in self.metrics.val])
-        self.metrics_test = MetricCollection([instantiate(m) for m in self.metrics.val])
+        self.metrics_val = (
+            instantiate(self.metrics.val)
+            if getattr(self.metrics, "val", None)
+            else None
+        )
+        self.metrics_test = self.metrics_val
         self.model = instantiate(model, key=key_model)
         self.loss_fn = instantiate(loss)
         self.learning_rate_schedule = (
@@ -77,10 +79,8 @@ class BaseTrainerDebug(L.LightningModule):
         transforms.append(optimizer)
         return optax.chain(*transforms)
 
-    def _update_metrics_for_batch(self, metrics, batch):
+    def _update_metrics_for_batch(self, metrics: MetricFnCollection, batch):
         gt_xy_batch = batch["agent_future"][:, ..., :2]
-        future_valid_batch = batch["agent_future_valid"]
-        agents_coeffs_batch = batch["agents_coeffs"]
         batch_size = gt_xy_batch.shape[0]
         pred_xy_batch = self.sample_batch_sol(
             self.model,
@@ -89,17 +89,11 @@ class BaseTrainerDebug(L.LightningModule):
             batch,
             batch_size=batch_size,
         )
-        for sample_idx in range(batch_size):
-            gt_xy = gt_xy_batch[sample_idx]
-            future_valid = future_valid_batch[sample_idx]
-            pred_xy = pred_xy_batch[sample_idx]
-            metrics.update(
-                pred_xy,
-                gt_xy,
-                agents_coeffs_batch[sample_idx],
-                future_valid,
-            )
-        return pred_xy_batch
+        batch["pred_xy"] = pred_xy_batch
+        batch["gt_xy"] = gt_xy_batch
+        batch["future_valid"] = batch["agent_future_valid"]
+        vals = metrics(**batch)
+        return pred_xy_batch, vals
 
     def sample_one_sol(
         self,
@@ -167,13 +161,13 @@ class BaseTrainerDebug(L.LightningModule):
             return
 
         images = []
-        plot_kwargs = plot_vis_kwargs(self)
+        plot_kwargs = self._plot_vis_kwargs()
         num_samples = min(int(self.vis.get("num_samples", 0)), sampled_trajs.shape[0])
         for i in range(num_samples):
             scenario = batch["scenario"][i]
             if scenario is None:
                 continue
-            pred_xy_plot = mask_pred_for_plot(
+            pred_xy_plot = self._mask_pred_for_plot(
                 sampled_trajs[i], batch["agents_coeffs"][i]
             )
             pred_xy_world = batch_transform_trajs_to_global_frame(
@@ -191,28 +185,49 @@ class BaseTrainerDebug(L.LightningModule):
             )
 
         if images:
-            log_images(
-                self,
-                image_log_name("val", "predictions"),
-                images,
-            )
+            self._log_images(self._image_log_name("val", "predictions"), images)
+
+    def _plot_vis_kwargs(self):
+        excluded = {
+            "debug_metrics",
+            "debug_denoiser_scale",
+            "direct_prediction_eval",
+            "num_samples",
+            "num_trajectory_samples",
+            "sample_steps",
+            "sample_video_fps",
+            "enable_visualization",
+            "enable_train_visualization",
+        }
+        return {k: v for k, v in self.vis.items() if k not in excluded}
+
+    @staticmethod
+    def _image_log_name(split, name):
+        return f"images/{split}_{name}"
+
+    @staticmethod
+    def _mask_pred_for_plot(pred_xy, agents_coeffs):
+        pred_xy = jnp.asarray(pred_xy)
+        agents_coeffs = jnp.asarray(agents_coeffs)
+        while agents_coeffs.ndim > pred_xy.ndim - 2:
+            agents_coeffs = jnp.squeeze(agents_coeffs, axis=0)
+        while agents_coeffs.ndim < pred_xy.ndim - 2:
+            agents_coeffs = agents_coeffs[None, ...]
+        valid_agents = (agents_coeffs > 0)[..., None, None]
+        return jnp.where(valid_agents, pred_xy, jnp.nan)
+
+    def _log_images(self, key, images):
+        logger = getattr(self, "logger", None)
+        if logger is None or not hasattr(logger, "log_image"):
+            return
+        logger.log_image(key=key, images=images, step=int(self.global_step_))
 
     def training_step(self, batch, batch_idx):
         loss = self._step(batch, "train")
-        metric_every = max(
-            1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1))
-        )
-        should_run_metrics = (
-            batch_idx == 0
-            and len(self.metrics_train) > 0
-            and (
-                (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
+        if self.metrics_train is not None and len(self.metrics_train) > 0:
+            sampled_trajs, vals = self._update_metrics_for_batch(
+                self.metrics_train, batch
             )
-        )
-        if should_run_metrics:
-            self.metrics_train.reset()
-            sampled_trajs = self._update_metrics_for_batch(self.metrics_train, batch)
-            vals = self.metrics_train.compute()
             log_dict = {f"train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
             self.log_dict(
                 log_dict,
@@ -221,23 +236,16 @@ class BaseTrainerDebug(L.LightningModule):
                 on_epoch=True,
                 batch_size=batch["agent_future"].shape[0],
             )
-            self._log_validation_visualizations(batch, sampled_trajs)
+            if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
+                self._log_validation_visualizations(batch, sampled_trajs)
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss = self._step(batch, "val")
-        metric_every = max(1, int(self.trainer_cfg.get("val_metric_every_n_epochs", 1)))
-        should_run_metrics = (
-            batch_idx == 0
-            and len(self.metrics_val) > 0
-            and (
-                (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
+        if self.metrics_val is not None and len(self.metrics_val) > 0:
+            sampled_trajs, vals = self._update_metrics_for_batch(
+                self.metrics_val, batch
             )
-        )
-        if should_run_metrics:
-            self.metrics_val.reset()
-            sampled_trajs = self._update_metrics_for_batch(self.metrics_val, batch)
-            vals = self.metrics_val.compute()
             log_dict = {f"val/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
             self.log_dict(
                 log_dict,
@@ -246,7 +254,8 @@ class BaseTrainerDebug(L.LightningModule):
                 on_epoch=True,
                 batch_size=batch["agent_future"].shape[0],
             )
-            self._log_validation_visualizations(batch, sampled_trajs)
+            if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
+                self._log_validation_visualizations(batch, sampled_trajs)
         return loss
 
     def test_step(self, batch, batch_idx):
