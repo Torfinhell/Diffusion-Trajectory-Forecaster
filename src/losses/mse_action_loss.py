@@ -33,6 +33,8 @@ class MSELoss(eqx.Module):
     ):
         if self.path_type == "xy":
             gt_xy = agent_future[..., :2] / self.coord_scale
+        elif self.path_type == "":
+            pass
         else:
             raise NotImplementedError(
                 "Loss for this type of path_type is not Implemented"

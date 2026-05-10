@@ -29,15 +29,15 @@ def main(cfg) -> None:
     dm.setup("fit")
     resolve_scheduler_decay_steps(hparams, dm)
 
-    debug_type = cfg.trainer.get("debug_type", None)
+    train_mode = cfg.trainer.get("train_mode", None)
     trainer_mapping = {
         None: BaseTrainer,
         "debug": BaseTrainerDebug,
         "profiler": BaseProfilerDebug,
     }
 
-    if debug_type not in trainer_mapping:
-        raise NotImplementedError(f"Debugging of type {debug_type} is not implemented")
+    if train_mode not in trainer_mapping:
+        raise NotImplementedError(f"Debugging of type {train_mode} is not implemented")
     logger_name = logger.name if logger is not None else "default_run"
     jax_profiler_dir = f"./clearml/{logger_name}/jax_profiler"
     diff_trainer_kwargs = dict(
@@ -56,7 +56,7 @@ def main(cfg) -> None:
         num_steps=cfg.trainer.get("jax_profiler_num_steps", 3),
     )
 
-    diff_trainer = trainer_mapping[debug_type](**diff_trainer_kwargs)
+    diff_trainer = trainer_mapping[train_mode](**diff_trainer_kwargs)
 
     callbacks = [RichProgressBar(leave=True)]
     profiler = None
