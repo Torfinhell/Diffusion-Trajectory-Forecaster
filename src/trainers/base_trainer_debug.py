@@ -9,7 +9,7 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricFnCollection
-from src.utils.data_utils import batch_transform_trajs_to_global_frame
+from src.utils.data_utils import batch_transform_trajs_to_global_frame, denormalize_traj
 from src.visualization.viz import plot_simulator_state
 
 
@@ -72,6 +72,9 @@ class BaseTrainerDebug(L.LightningModule):
         self.optim = self.clip_optimizer(optimizer_transform)
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
 
+    def configure_optimizers(self):
+        return []
+
     def clip_optimizer(self, optimizer):
         transforms = []
         if self.grad_clip is not None:
@@ -89,6 +92,7 @@ class BaseTrainerDebug(L.LightningModule):
             batch,
             batch_size=batch_size,
         )
+        pred_xy_batch = denormalize_traj(pred_xy_batch, batch["x0_mean"], batch["x0_var"])
         batch["pred_xy"] = pred_xy_batch
         batch["gt_xy"] = gt_xy_batch
         batch["future_valid"] = batch["agent_future_valid"]
@@ -115,9 +119,9 @@ class BaseTrainerDebug(L.LightningModule):
             timestep, step_key = inputs
             timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
             model_output = model(
-                jnp.asarray(timestep, dtype=x_t.dtype),
+                timestep_arr,
                 x_t,
-                batch,
+                **batch,
             )
             x_prev = diffusion_sampler.step(
                 step_key,
@@ -223,8 +227,13 @@ class BaseTrainerDebug(L.LightningModule):
         logger.log_image(key=key, images=images, step=int(self.global_step_))
 
     def training_step(self, batch, batch_idx):
-        loss = self._step(batch, "train")
-        if self.metrics_train is not None and len(self.metrics_train) > 0:
+        self._step(batch, "train")
+        metric_every = max(1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1)))
+        should_run_metrics = (
+            len(self.metrics_train) > 0
+            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+        )
+        if should_run_metrics:
             sampled_trajs, vals = self._update_metrics_for_batch(
                 self.metrics_train, batch
             )
@@ -238,11 +247,16 @@ class BaseTrainerDebug(L.LightningModule):
             )
             if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
                 self._log_validation_visualizations(batch, sampled_trajs)
-        return loss
+        return None
 
     def validation_step(self, batch, batch_idx):
         loss = self._step(batch, "val")
-        if self.metrics_val is not None and len(self.metrics_val) > 0:
+        metric_every = max(1, int(self.trainer_cfg.get("val_metric_every_n_epochs", 1)))
+        should_run_metrics = (
+            len(self.metrics_val) > 0
+            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+        )
+        if should_run_metrics:
             sampled_trajs, vals = self._update_metrics_for_batch(
                 self.metrics_val, batch
             )
@@ -318,14 +332,16 @@ class BaseTrainerDebug(L.LightningModule):
             grad_fn = eqx.filter_value_and_grad(
                 BaseTrainerDebug.batch_loss_fn, has_aux=True
             )
-            loss_dict, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
+            (loss, stats), grads = grad_fn(
+                model, diffusion_sampler, loss_fn, batch, key
+            )
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss_dict = BaseTrainerDebug.batch_loss_fn(
+            loss, stats = BaseTrainerDebug.batch_loss_fn(
                 model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = None
@@ -336,7 +352,8 @@ class BaseTrainerDebug(L.LightningModule):
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
-            **loss_dict,
+            "loss": loss,
+            **stats,
         }
         if train:
             step_out["model"] = model
@@ -358,8 +375,6 @@ class BaseTrainerDebug(L.LightningModule):
                 **single_sample_dict,
             )
 
-        loss_dict_per_sample = jax.vmap(mapped_fn)(batch, loss_keys)
-        mean_loss_dict = jax.tree.map(
-            lambda x: jnp.mean(x, axis=0), loss_dict_per_sample
-        )
-        return mean_loss_dict
+        losses, stats = jax.vmap(mapped_fn)(batch, loss_keys)
+        mean_stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
+        return jnp.mean(losses, axis=0), mean_stats

@@ -1,24 +1,26 @@
 defaults:
   - model: diffusion_attn
-  - dataloaders: basic
+  - dataloaders: overfit
   - feat_extract: small_no_scenes
   - logger: clearml
-  - metrics: all_metrics #TODO Did we fix all metrics?
-  - visual: default #TODO Why default here?
+  - metrics: all_metrics
+  - visual: default
   - diffusion_sampler: ddpm
   - _self_
+
 trainer:
   train_mode: null
-  path_type: "xy" # or "ay" -accelarate yaw rate
-  num_epochs: 20
-  train_epoch_len: null
-  val_epoch_len: null
+  path_type: "xy"
+  num_epochs: 1000
+  train_epoch_len: 1.0
+  val_epoch_len: 1.0
   log_validation: true
-  gradient_clip_val: 5.0
+  gradient_clip_val: 5
   seed: 1
-  check_val_every_n_epoch: 1
+  check_val_every_n_epoch: 20
   print_hparams: False
-  logging: "offline"
+  logging: "online"
+
 loss:
   _target_: src.losses.MSELoss
   coord_scale: 1.0
@@ -29,6 +31,6 @@ optimizer:
 
 scheduler:
   _target_: optax.cosine_decay_schedule
-  init_value: 1e-3
-  decay_steps: 230
-  alpha: 0.7
+  init_value: 5e-3
+  decay_steps: 650
+  alpha: 0.01

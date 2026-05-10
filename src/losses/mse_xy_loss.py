@@ -45,11 +45,8 @@ class MSELoss(eqx.Module):
         )
         noise = jr.normal(noise_key, gt_xy.shape)
         y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
-        timestep_f = jnp.asarray(timestep, dtype=gt_xy.dtype) / jnp.maximum(
-            diffusion_sampler.num_steps - 1, 1
-        )
         pred_xy = model(
-            timestep_f,
+            timestep,
             y,
             **kwargs,
         )

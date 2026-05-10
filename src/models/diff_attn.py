@@ -70,6 +70,8 @@ class AttentionMLP(eqx.Module):
     dropout_key: jax.random.PRNGKey
     type_attn: Literal["cross", "self"]
     mlp: eqx.nn.MLP
+    norm1: eqx.nn.LayerNorm
+    norm2: eqx.nn.LayerNorm
 
     def __init__(
         self,
@@ -111,13 +113,19 @@ class AttentionMLP(eqx.Module):
             out_size=out_dim,
             key=mlp_key,
         )
+        self.norm1 = eqx.nn.LayerNorm(shape=attn_dim)
+        self.norm2 = eqx.nn.LayerNorm(shape=attn_dim)
 
     def __call__(self, x, kv_cond=None, attn_mask=None):
         if self.type_attn == "self":
-            x = self.attn(x, x, x, mask=attn_mask, key=self.dropout_key)
+            x = jax.vmap(self.norm1)(
+                x + self.attn(x, x, x, mask=attn_mask, key=self.dropout_key)
+            )
         else:
-            x = self.attn(x, kv_cond, kv_cond, mask=attn_mask, key=self.dropout_key)
-        return jax.vmap(self.mlp)(x)
+            x = jax.vmap(self.norm1)(
+                x + self.attn(x, kv_cond, kv_cond, mask=attn_mask, key=self.dropout_key)
+            )
+        return jax.vmap(self.norm2)(x + jax.vmap(self.mlp)(x))
 
 
 class TransformerEncoder(eqx.Module):
@@ -159,17 +167,17 @@ class TransformerEncoder(eqx.Module):
 
 
 class FourierEmbedding(eqx.Module):
-    freqs: eqx.nn.Embedding
+    freqs: jnp.ndarray
     embed_dim: int
 
     def __init__(self, embed_dim, key):
-        self.freqs = eqx.nn.Embedding(1, embed_dim // 2, key=key)
+        half = embed_dim // 2
         self.embed_dim = embed_dim
+        self.freqs = jnp.exp(jnp.arange(half) * -(jnp.log(10000.0) / (half - 1)))
 
     def __call__(self, x):
-        return jnp.concatenate(
-            [jnp.cos(self.freqs.weight * x), jnp.sin(self.freqs.weight * x)], axis=-1
-        ).squeeze(0)[: self.embed_dim]
+        args = x * self.freqs
+        return jnp.concatenate([jnp.cos(args), jnp.sin(args)])
 
 
 class RelationEncoder(eqx.Module):
@@ -324,13 +332,98 @@ class AgentEncoder(eqx.Module):
         return jax.vmap(self.mlp)(x).reshape(a, -1)
 
 
+class SimpleAgentEncoder(eqx.Module):
+    mlp: eqx.nn.MLP
+
+    def __init__(self, time_len: int, num_feat: int, out_dim: int, key):
+        self.mlp = eqx.nn.MLP(
+            in_size=time_len * num_feat,
+            width_size=out_dim,
+            depth=1,
+            out_size=out_dim,
+            activation=jnn.relu,
+            key=key,
+        )
+
+    def __call__(self, x):
+        if x.ndim == 4:
+            x = x[0]  # (a, t, f)
+        a = x.shape[0]
+        return jax.vmap(self.mlp)(x.reshape(a, -1))
+
+
+class ContextCombiner(eqx.Module):
+    """Per-agent context encoder. Zero-init additive linears fuse agent + scene tokens.
+    Each projection takes cat(agent_enc, scene_token) → out_dim, zero-init weight.
+    At init: all projections output 0 → out = agent_enc (exact identity)."""
+
+    map_proj: eqx.nn.Linear  # Linear(agent_dim + map_dim, out_dim), zero-init
+    tl_proj: eqx.nn.Linear  # Linear(agent_dim + tl_dim,  out_dim), zero-init
+    rel_proj: eqx.nn.Linear  # Linear(agent_dim + rel_dim, out_dim), zero-init
+
+    def __init__(
+        self,
+        agent_dim: int,
+        out_dim: int,
+        hidden_dim: int,
+        key,
+        map_dim: int = 0,
+        tl_dim: int = 0,
+        rel_dim: int = 0,
+    ):
+        def _zero_linear(in_dim, fold_id):
+            lin = eqx.nn.Linear(
+                max(int(in_dim), 1),
+                out_dim,
+                use_bias=False,
+                key=jr.fold_in(key, fold_id),
+            )
+            return eqx.tree_at(lambda l: l.weight, lin, jnp.zeros_like(lin.weight))
+
+        self.map_proj = _zero_linear(agent_dim + map_dim, 0)
+        self.tl_proj = _zero_linear(agent_dim + tl_dim, 1)
+        self.rel_proj = _zero_linear(agent_dim + rel_dim, 2)
+
+    def __call__(
+        self,
+        agent_encodings,
+        agents_mask,
+        scene_map=None,
+        scene_tl=None,
+        scene_rel=None,
+    ):
+        out = agent_encodings  # identity at init
+        a = agent_encodings.shape[0]
+        if scene_map is not None:
+            inp = jnp.concatenate(
+                [
+                    agent_encodings,
+                    jnp.broadcast_to(scene_map[None], (a, scene_map.shape[0])),
+                ],
+                axis=-1,
+            )
+            out = out + jax.vmap(self.map_proj)(inp)
+        if scene_tl is not None:
+            inp = jnp.concatenate(
+                [
+                    agent_encodings,
+                    jnp.broadcast_to(scene_tl[None], (a, scene_tl.shape[0])),
+                ],
+                axis=-1,
+            )
+            out = out + jax.vmap(self.tl_proj)(inp)
+        if scene_rel is not None:
+            inp = jnp.concatenate([agent_encodings, scene_rel], axis=-1)
+            out = out + jax.vmap(self.rel_proj)(inp)
+        return jnp.where(agents_mask[:, None], 0.0, out)
+
+
 class SceneEncoder(eqx.Module):
-    agent_encoder: AgentEncoder
+    agent_encoder: AgentEncoder | SimpleAgentEncoder
     map_encoder: MapEncoder | None
     traffic_light_encoder: TrafficLightEncoder | None
     relation_encoder: RelationEncoder | None
-    relation_proj: eqx.nn.Linear | None
-    transformer_encoder: TransformerEncoder
+    context_combiner: ContextCombiner
     extract_map: bool
     extract_traffic: bool
     extract_relations: bool
@@ -341,24 +434,16 @@ class SceneEncoder(eqx.Module):
         map_embed_dim: int | None = None,
         map_hidden_dim: int = 128,
         traffic_light_embed_dim: int | None = None,
-        transformer_layers: int = 2,
-        transformer_attn_num_heads: int = 1,
-        transformer_mlp_dim: int = 64,
-        transformer_num_mlp_layers: int = 1,
-        transformer_drop_attn: float = 0.1,
+        rel_embed_dim: int | None = None,
+        context_hidden_dim: int = 256,
         extract_map: bool = True,
         extract_traffic: bool = True,
         extract_relations: bool = True,
         key=None,
+        **kwargs,
     ):
-        (
-            agent_key,
-            map_key,
-            traffic_key,
-            relation_key,
-            relation_proj_key,
-            transformer_key,
-        ) = jr.split(key, 6)
+        agent_key, map_key, traffic_key, combiner_key = jr.split(key, 4)
+        rel_key = jr.fold_in(key, 42)
         context_dim = int(agent_encoder_args["out_dim"])
         map_embed_dim = context_dim if map_embed_dim is None else int(map_embed_dim)
         traffic_light_embed_dim = (
@@ -366,7 +451,13 @@ class SceneEncoder(eqx.Module):
             if traffic_light_embed_dim is None
             else int(traffic_light_embed_dim)
         )
-        self.agent_encoder = AgentEncoder(**agent_encoder_args, key=agent_key)
+        rel_embed_dim = context_dim if rel_embed_dim is None else int(rel_embed_dim)
+        self.agent_encoder = SimpleAgentEncoder(
+            time_len=int(agent_encoder_args["time_len"]),
+            num_feat=int(agent_encoder_args["num_feat"]),
+            out_dim=context_dim,
+            key=agent_key,
+        )
         self.extract_map = bool(extract_map)
         self.extract_traffic = bool(extract_traffic)
         self.extract_relations = bool(extract_relations)
@@ -380,42 +471,25 @@ class SceneEncoder(eqx.Module):
             if self.extract_traffic
             else None
         )
-        if self.extract_relations:
-            self.relation_encoder = RelationEncoder(
-                hidden_dim=context_dim, key=relation_key
-            )
-            self.relation_proj = eqx.nn.Linear(
-                in_features=context_dim,
-                out_features=context_dim,
-                key=relation_proj_key,
-            )
-            self.relation_proj = eqx.tree_at(
-                lambda layer: layer.weight,
-                self.relation_proj,
-                jnp.zeros_like(self.relation_proj.weight),
-            )
-            self.relation_proj = eqx.tree_at(
-                lambda layer: layer.bias,
-                self.relation_proj,
-                jnp.zeros_like(self.relation_proj.bias),
-            )
-        else:
-            self.relation_encoder = None
-            self.relation_proj = None
-        self.transformer_encoder = TransformerEncoder(
-            layers=transformer_layers,
-            attn_dim=context_dim,
-            attn_num_heads=transformer_attn_num_heads,
-            mlp_dim=transformer_mlp_dim,
-            num_mlp_layers=transformer_num_mlp_layers,
-            drop_attn=transformer_drop_attn,
-            key=transformer_key,
+        self.relation_encoder = (
+            RelationEncoder(hidden_dim=rel_embed_dim, key=rel_key)
+            if self.extract_relations
+            else None
+        )
+        self.context_combiner = ContextCombiner(
+            agent_dim=context_dim,
+            out_dim=context_dim,
+            hidden_dim=context_hidden_dim,
+            key=combiner_key,
+            map_dim=map_embed_dim,
+            tl_dim=traffic_light_embed_dim,
+            rel_dim=rel_embed_dim,
         )
 
     def __call__(
         self,
         agent_past,
-        polylines=None,
+        polylines=None,  # local
         polylines_valid=None,
         traffic_light_points=None,
         relations=None,
@@ -423,70 +497,76 @@ class SceneEncoder(eqx.Module):
         agents_types=None,
         **kwargs,
     ):
-        if agents_valid is None:
-            raise ValueError("`agents_valid` is required for encoder context masking.")
         encoded_agents = self.agent_encoder(agent_past)
-        agents_mask = ~agents_valid
-        context_tokens_list = [encoded_agents]
-        context_mask_list = [agents_mask]
-
-        if self.extract_map and self.map_encoder is not None:
-            if polylines is None or polylines_valid is None:
-                raise ValueError(
-                    "Map extraction is enabled but `polylines`/`polylines_valid` are missing."
-                )
-            encoded_map_lanes = self.map_encoder(polylines)
-            maps_mask = polylines_valid <= 0
-            context_tokens_list.append(encoded_map_lanes)
-            context_mask_list.append(maps_mask)
-        else:
-            maps_mask = jnp.ones((0,), dtype=bool)
-
-        if self.extract_traffic and self.traffic_light_encoder is not None:
-            if traffic_light_points is None:
-                raise ValueError(
-                    "Traffic extraction is enabled but `traffic_light_points` are missing."
-                )
-            encoded_traffic_lights = self.traffic_light_encoder(traffic_light_points)
-            traffic_lights_mask = jnp.all(traffic_light_points == 0, axis=-1)
-            context_tokens_list.append(encoded_traffic_lights)
-            context_mask_list.append(traffic_lights_mask)
-        else:
-            traffic_lights_mask = jnp.ones((0,), dtype=bool)
-
-        context_tokens = jnp.concatenate(context_tokens_list, axis=0)
-        context_mask = jnp.concatenate(context_mask_list, axis=0)
-
-        if (
-            self.extract_relations
-            and self.relation_encoder is not None
-            and self.relation_proj is not None
-        ):
-            if relations is None:
-                raise ValueError(
-                    "Relation extraction is enabled but `relations` are missing."
-                )
-            context_size = context_tokens.shape[0]
-            relations = relations[:context_size, :context_size]
-            pair_valid = (~context_mask)[:, None] & (~context_mask)[None, :]
-            relation_context = self.relation_encoder(relations, pair_valid)
-            relation_context = jax.vmap(self.relation_proj)(relation_context)
-            context_tokens = jnp.where(
-                context_mask[:, None], 0.0, context_tokens + relation_context
-            )
-        else:
-            context_tokens = jnp.where(context_mask[:, None], 0.0, context_tokens)
-
-        encodings = self.transformer_encoder(
-            context_tokens,
-            context_mask,
+        encoded_map_lanes = (
+            self.map_encoder(polylines)
+            if self.map_encoder is not None and polylines is not None
+            else None
+        )
+        encoded_tl = (
+            self.traffic_light_encoder(traffic_light_points)
+            if self.traffic_light_encoder is not None
+            and traffic_light_points is not None
+            else None
         )
 
+        agents_mask = ~agents_valid
+        maps_mask = (
+            polylines_valid <= 0
+            if polylines_valid is not None
+            else jnp.ones((0,), dtype=bool)
+        )
+        traffic_lights_mask = (
+            jnp.all(traffic_light_points == 0, axis=-1)
+            if traffic_light_points is not None
+            else jnp.ones((0,), dtype=bool)
+        )
+
+        # Pool valid map lanes → scene map token
+        if encoded_map_lanes is not None:
+            valid_lanes = (~maps_mask).astype(jnp.float32)
+            scene_map = (encoded_map_lanes * valid_lanes[:, None]).sum(0) / jnp.maximum(
+                valid_lanes.sum(), 1.0
+            )
+        else:
+            scene_map = None
+        # Pool valid traffic lights → scene TL token
+        if encoded_tl is not None:
+            valid_tl = (~traffic_lights_mask).astype(jnp.float32)
+            scene_tl = (encoded_tl * valid_tl[:, None]).sum(0) / jnp.maximum(
+                valid_tl.sum(), 1.0
+            )
+        else:
+            scene_tl = None
+        # Per-agent relation embeddings: mean-pool neighbor edge embeddings
+        scene_rel = None
+        if self.relation_encoder is not None and relations is not None:
+            if relations.ndim == 4:
+                relations = relations[0]  # squeeze batch dim
+            a = encoded_agents.shape[0]
+            agent_relations = relations[:a, :a, :]  # (a, a, 3)
+            self_loop = jnp.eye(a, dtype=bool)
+            pair_mask = agents_valid[:, None] & agents_valid[None, :] & ~self_loop
+            scene_rel = self.relation_encoder(
+                agent_relations, pair_mask
+            )  # (a, rel_dim)
+        else:
+            scene_rel = None
+        # Per-agent context: agent fused with scene map + TL + relations
+        encodings = self.context_combiner(
+            encoded_agents,
+            agents_mask,
+            scene_map=scene_map,
+            scene_tl=scene_tl,
+            scene_rel=scene_rel,
+        )
+
+        agents_types = kwargs.get("agents_types")
         outputs = {
             "agents_mask": agents_mask,
             "maps_mask": maps_mask,
             "traffic_lights_mask": traffic_lights_mask,
-            "context_mask": context_mask,
+            "context_mask": agents_mask,
             "encodings": encodings,
         }
         if agents_types is not None:
@@ -499,8 +579,9 @@ class DiffAttention(eqx.Module):
     out_shape: tuple[int, ...]
     ca_mlp_layers: list[AttentionMLP]
     sa_mlp_layers: list[AttentionMLP]
-    embed_future: FourierEmbedding
     embed_past: FourierEmbedding
+    noise_level_embedding: eqx.nn.Embedding
+    input_proj: eqx.nn.Sequential
     mlp_out: eqx.nn.Linear
 
     def __init__(
@@ -513,20 +594,19 @@ class DiffAttention(eqx.Module):
         out_shape: list[int],
         final_out_dim: int,
         key,
+        num_diffusion_steps: int = 50,
         extract_map: bool = True,
         extract_traffic: bool = True,
         extract_relations: bool = True,
     ):
-        se_key, ca_mlp_key, sa_mlp_key, out_key, future_key, past_key = jr.split(key, 6)
+        se_key, ca_mlp_key, sa_mlp_key, out_key, future_key, past_key, proj_key = (
+            jr.split(key, 7)
+        )
         self.encoder = SceneEncoder(
             agent_encoder_args=se_args,
             map_embed_dim=se_args["out_dim"],
             traffic_light_embed_dim=se_args["out_dim"],
-            transformer_layers=2,
-            transformer_attn_num_heads=camlp_args["attn_num_heads"],
-            transformer_mlp_dim=camlp_args["mlp_dim"],
-            transformer_num_mlp_layers=camlp_args["num_mlp_layers"],
-            transformer_drop_attn=camlp_args["drop_attn"],
+            context_hidden_dim=camlp_args["mlp_dim"],
             extract_map=extract_map,
             extract_traffic=extract_traffic,
             extract_relations=extract_relations,
@@ -542,12 +622,25 @@ class DiffAttention(eqx.Module):
             AttentionMLP(**camlp_args, key=layer_key, type_attn="cross")
             for layer_key in ca_keys
         ]
-        self.embed_future = FourierEmbedding(camlp_args["out_dim"], key=future_key)
+        t_emb_dim = camlp_args["out_dim"]
+        # learned integer timestep embedding, same as VBD noise_level_embedding
+        self.noise_level_embedding = eqx.nn.Embedding(
+            num_diffusion_steps, t_emb_dim, key=future_key
+        )
         self.embed_past = FourierEmbedding(se_args["out_dim"], key=past_key)
         self.mlp_out = eqx.nn.Linear(
             in_features=camlp_args["out_dim"],
             out_features=final_out_dim,
             key=out_key,
+        )
+        # 2-layer MLP projection of x_flat → attn_dim (VBD encoder style)
+        proj1_key, proj2_key = jr.split(proj_key)
+        self.input_proj = eqx.nn.Sequential(
+            [
+                eqx.nn.Linear(out_shape[1] * 2, t_emb_dim, key=proj1_key),
+                eqx.nn.Lambda(jnn.relu),
+                eqx.nn.Linear(t_emb_dim, camlp_args["out_dim"], key=proj2_key),
+            ]
         )
         self.out_shape = tuple(out_shape)
 
@@ -565,13 +658,15 @@ class DiffAttention(eqx.Module):
         agents_mask = encoder_outputs["agents_mask"]
 
         _, a, _, _ = x_t.shape
-        x_t = x_t.reshape(a, -1) + self.embed_future(t_noise)
-        kv_cond = kv_cond + self.embed_past(t_noise)
+        x_t_flat = x_t.reshape(a, -1)
+        t_emb = self.noise_level_embedding(t_noise)
+        x_t = jax.vmap(self.input_proj)(x_t_flat)
+        x_t = x_t + t_emb
 
         valid_agents = ~agents_mask
         valid_context = ~context_mask
         self_attn_mask = valid_agents[:, None] & valid_agents[None, :]
-        cross_attn_mask = valid_agents[:, None] & valid_context[None, :]
+        cross_attn_mask = jnp.diag(valid_agents) & valid_context[None, :]
 
         x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
         for layer in self.sa_mlp_layers:

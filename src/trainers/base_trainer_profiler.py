@@ -124,17 +124,15 @@ class BaseProfilerDebug(L.LightningModule):
         opt_update=None,
     ):
         if train:
-            grad_fn = eqx.filter_value_and_grad(
-                BaseProfilerDebug.batch_loss_fn, has_aux=True
-            )
-            loss_dict, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
+            grad_fn = eqx.filter_value_and_grad(BaseProfilerDebug.batch_loss_fn)
+            loss, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss_dict = BaseProfilerDebug.batch_loss_fn(
+            loss = BaseProfilerDebug.batch_loss_fn(
                 model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = None
@@ -144,7 +142,7 @@ class BaseProfilerDebug(L.LightningModule):
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
-            **loss_dict,
+            "loss": loss,
         }
         if train:
             step_out["model"] = model
@@ -160,8 +158,5 @@ class BaseProfilerDebug(L.LightningModule):
         sample_loss_fn = lambda sample, sample_key: loss_fn(
             model, diffusion_sampler, **sample, key=sample_key, debug=False
         )
-        loss_dict_per_sample = jax.vmap(sample_loss_fn)(batch, loss_keys)
-        mean_loss_dict = jax.tree.map(
-            lambda x: jnp.mean(x, axis=0), loss_dict_per_sample
-        )
-        return mean_loss_dict
+        losses = jax.vmap(sample_loss_fn)(batch, loss_keys)
+        return jax.tree.map(lambda x: jnp.mean(x, axis=0), losses)["loss"]

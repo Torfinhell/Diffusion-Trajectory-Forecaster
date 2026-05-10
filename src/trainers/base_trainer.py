@@ -9,7 +9,7 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricFnCollection
-from src.utils.data_utils import batch_transform_trajs_to_global_frame
+from src.utils.data_utils import batch_transform_trajs_to_global_frame, denormalize_traj
 from src.visualization.viz import plot_simulator_state
 
 
@@ -71,6 +71,9 @@ class BaseTrainer(L.LightningModule):
         self.optim = self.clip_optimizer(optimizer_transform)
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
 
+    def configure_optimizers(self):
+        return []
+
     def clip_optimizer(self, optimizer):
         transforms = []
         if self.grad_clip is not None:
@@ -87,6 +90,9 @@ class BaseTrainer(L.LightningModule):
             gt_xy_batch.shape[1:],
             batch,
             batch_size=batch_size,
+        )
+        pred_xy_batch = denormalize_traj(
+            pred_xy_batch, batch["x0_mean"], batch["x0_var"]
         )
         batch["pred_xy"] = pred_xy_batch
         batch["gt_xy"] = gt_xy_batch
@@ -110,7 +116,7 @@ class BaseTrainer(L.LightningModule):
             )
             if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
                 self._log_validation_visualizations(batch, sampled_trajs)
-        return loss
+        return None
 
     def validation_step(self, batch, batch_idx):
         loss = self._step(batch, "val")
@@ -186,15 +192,15 @@ class BaseTrainer(L.LightningModule):
         opt_update=None,
     ):
         if train:
-            grad_fn = eqx.filter_value_and_grad(BaseTrainer.batch_loss_fn, has_aux=True)
-            loss_dict, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
+            grad_fn = eqx.filter_value_and_grad(BaseTrainer.batch_loss_fn)
+            loss, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss_dict = BaseTrainer.batch_loss_fn(
+            loss = BaseTrainer.batch_loss_fn(
                 model, diffusion_sampler, loss_fn, batch, key
             )
             grad_norm = None
@@ -204,7 +210,7 @@ class BaseTrainer(L.LightningModule):
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
-            **loss_dict,
+            "loss": loss,
         }
         if train:
             step_out["model"] = model
@@ -218,10 +224,10 @@ class BaseTrainer(L.LightningModule):
         batch_size = batch["agent_future"].shape[0]
         loss_keys = jr.split(key, batch_size)
         sample_loss_fn = lambda sample, sample_key: loss_fn(
-            model, diffusion_sampler, **sample, key=sample_key, debug=True
+            model, diffusion_sampler, **sample, key=sample_key, debug=False
         )
-        loss_dict_per_sample = jax.vmap(sample_loss_fn)(batch, loss_keys)
-        return jax.tree.map(lambda x: jnp.mean(x, axis=0), loss_dict_per_sample)
+        losses = jax.vmap(sample_loss_fn)(batch, loss_keys)
+        return jax.tree.map(lambda x: jnp.mean(x, axis=0), losses)["loss"]
 
     def sample_one_sol(
         self,
