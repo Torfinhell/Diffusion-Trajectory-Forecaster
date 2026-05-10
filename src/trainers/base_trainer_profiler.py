@@ -28,7 +28,6 @@ class BaseProfilerDebug(L.LightningModule):
         super().__init__()
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        jax.profiler.start_server(9999)
         self._seen_train_batches = 0
         self.start_step = int(start_step)
         self.stop_step = self.start_step + int(num_steps)
@@ -57,6 +56,12 @@ class BaseProfilerDebug(L.LightningModule):
         optimizer_transform = instantiate(optimizer, **optimizer_args)
         self.optim = self.clip_optimizer(optimizer_transform)
         self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
+
+    def on_train_start(self):
+        jax.profiler.start_trace(str(self.log_dir))
+
+    def on_train_end(self):
+        jax.profiler.stop_trace()
 
     def configure_optimizers(self):
         return []
