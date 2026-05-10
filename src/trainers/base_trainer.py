@@ -91,9 +91,6 @@ class BaseTrainer(L.LightningModule):
             batch,
             batch_size=batch_size,
         )
-        pred_xy_batch = denormalize_traj(
-            pred_xy_batch, batch["x0_mean"], batch["x0_var"]
-        )
         batch["pred_xy"] = pred_xy_batch
         batch["gt_xy"] = gt_xy_batch
         batch["future_valid"] = batch["agent_future_valid"]
@@ -247,16 +244,15 @@ class BaseTrainer(L.LightningModule):
 
         def scan_step(x_t, inputs):
             timestep, step_key = inputs
-            timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
             model_output = model(
-                jnp.asarray(timestep, dtype=x_t.dtype),
+                timestep,
                 x_t,
-                batch,
+                **batch,
             )
             x_prev = diffusion_sampler.step(
                 step_key,
                 model_output,
-                timestep_arr,
+                timestep,
                 x_t,
             )
             return x_prev, x_prev

@@ -9,7 +9,7 @@ defaults:
   - _self_
 
 trainer:
-  train_mode: null
+  train_mode: "train"
   path_type: "xy"
   num_epochs: 1000
   train_epoch_len: 1.0

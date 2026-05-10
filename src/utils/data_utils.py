@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 
+
 def denormalize_traj(traj, mean, var):
     if mean.ndim == 1:
         mean = mean[None, None, :]
@@ -10,16 +11,10 @@ def denormalize_traj(traj, mean, var):
         std = jnp.sqrt(jnp.maximum(var, 1e-6))[:, None, None, :]
     return traj * std + mean
 
-def local_traj_stats(agent_future, agent_future_valid):
-    xy = jnp.asarray(agent_future[..., :2], dtype=jnp.float32)
-    valid = jnp.asarray(agent_future_valid[..., 0], dtype=xy.dtype)[..., None]
-    weight_sum = jnp.maximum(jnp.sum(valid, axis=(-2, -3), keepdims=False), 1.0)
-    mean = jnp.sum(xy * valid, axis=(-2, -3), keepdims=False) / weight_sum
-    var = jnp.sum(((xy - mean[None, None, :]) ** 2) * valid, axis=(-2, -3), keepdims=False) / weight_sum
-    return mean, var
 
 def wrap_angle(angle):
     return (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
+
 
 @jax.jit(static_argnames=["x_index", "y_index", "heading_index"])
 def batch_transform_trajs_to_local_frame(
@@ -41,12 +36,12 @@ def batch_transform_trajs_to_local_frame(
             f"got {trajs.shape}"
         )
 
-    x = trajs[..., x_index] # (B, num_agents, num_timesteps)
+    x = trajs[..., x_index]  # (B, num_agents, num_timesteps)
     y = trajs[..., y_index]
     theta = trajs[..., heading_index]
-    origin_xy = origin_xy[None, ...]      # (1, num_agents)
-    origin_theta = origin_theta[None, ...] 
-    origin_x = origin_xy[..., 0][..., None]# (1, num_agents, 1)
+    origin_xy = origin_xy[None, ...]  # (1, num_agents)
+    origin_theta = origin_theta[None, ...]
+    origin_x = origin_xy[..., 0][..., None]  # (1, num_agents, 1)
     origin_y = origin_xy[..., 1][..., None]
     origin_theta = origin_theta[..., None]
     cos_theta = jnp.cos(origin_theta)
@@ -66,6 +61,7 @@ def batch_transform_trajs_to_local_frame(
     if squeeze_batch:
         return transformed[0]
     return transformed
+
 
 def batch_transform_polylines_to_local_frame(polylines):
     if polylines.ndim == 3:
@@ -101,6 +97,7 @@ def batch_transform_polylines_to_local_frame(polylines):
     if squeeze_batch:
         return transformed[0], origin_info[0]
     return transformed, origin_info
+
 
 @jax.jit(static_argnames=["x_index", "y_index", "heading_index"])
 def batch_transform_trajs_to_global_frame(

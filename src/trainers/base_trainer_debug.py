@@ -92,7 +92,6 @@ class BaseTrainerDebug(L.LightningModule):
             batch,
             batch_size=batch_size,
         )
-        pred_xy_batch = denormalize_traj(pred_xy_batch, batch["x0_mean"], batch["x0_var"])
         batch["pred_xy"] = pred_xy_batch
         batch["gt_xy"] = gt_xy_batch
         batch["future_valid"] = batch["agent_future_valid"]
@@ -228,10 +227,11 @@ class BaseTrainerDebug(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         self._step(batch, "train")
-        metric_every = max(1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1)))
-        should_run_metrics = (
-            len(self.metrics_train) > 0
-            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+        metric_every = max(
+            1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1))
+        )
+        should_run_metrics = len(self.metrics_train) > 0 and (
+            (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
         )
         if should_run_metrics:
             sampled_trajs, vals = self._update_metrics_for_batch(
@@ -252,9 +252,8 @@ class BaseTrainerDebug(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss = self._step(batch, "val")
         metric_every = max(1, int(self.trainer_cfg.get("val_metric_every_n_epochs", 1)))
-        should_run_metrics = (
-            len(self.metrics_val) > 0
-            and ((self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0)
+        should_run_metrics = len(self.metrics_val) > 0 and (
+            (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
         )
         if should_run_metrics:
             sampled_trajs, vals = self._update_metrics_for_batch(
