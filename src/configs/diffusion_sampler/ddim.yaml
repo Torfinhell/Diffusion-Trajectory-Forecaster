@@ -1,0 +1,5 @@
+_target_: src.diffusion_samplers.ddim.DDIMSampler
+steps: 50
+schedule: cosine
+clamp_val: 100.0
+eta: 0.0

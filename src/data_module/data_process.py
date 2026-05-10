@@ -11,6 +11,15 @@ from src.utils.data_utils import (
 COORD_SCALE = 1.0
 
 
+def _local_traj_stats(agent_future, agent_future_valid):
+    xy = jnp.asarray(agent_future[..., :2], dtype=jnp.float32)
+    valid = jnp.asarray(agent_future_valid[..., 0], dtype=xy.dtype)[..., None]
+    weight_sum = jnp.maximum(jnp.sum(valid, axis=(-2, -3), keepdims=False), 1.0)
+    mean = jnp.sum(xy * valid, axis=(-2, -3), keepdims=False) / weight_sum
+    var = jnp.sum(((xy - mean[None, None, :]) ** 2) * valid, axis=(-2, -3), keepdims=False) / weight_sum
+    return mean, var
+
+
 
 @jax.jit(static_argnames=["topk"])
 def filter_topk_roadgraph_points(roadgraph, reference_points, topk):
@@ -123,6 +132,7 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
     agent_future_valid = (
         traj.valid[..., current_index + 1 :, None] & has_history[..., None, None]
     )
+    x0_mean, x0_var = _local_traj_stats(agent_future, agent_future_valid)
 
     is_modeled = scenarios.object_metadata.is_modeled
     is_interesting = scenarios.object_metadata.objects_of_interest
@@ -139,6 +149,8 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
         "agents_types": scenarios.object_metadata.object_types,
         "origin_xy": origin_xyz[..., :2],
         "origin_theta": origin_theta,
+        "x0_mean": x0_mean,
+        "x0_var": x0_var,
     }
 
 

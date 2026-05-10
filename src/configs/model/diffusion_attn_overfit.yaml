@@ -24,9 +24,10 @@ num_camlp: 2
 num_diffusion_steps: 50
 out_shape: [32, 80, 2]
 final_out_dim: 160
-old_version: true
-old_masking: true
+old_version: false
+old_masking: false
 input_residual: false
+encoder_transformer_layers: 1
 debug_mlp_only: False
 debug_mlp_dim: 256
 debug_mlp_layers: 3

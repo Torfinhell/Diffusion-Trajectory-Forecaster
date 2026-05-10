@@ -223,7 +223,8 @@ class DebuggableBaseDiffusionModel(Basetreainer):
                     )
                     first_pred_xy_world = to_world_frame(
                         first_pred_xy_plot,
-                        batch["origin_xy"][0],
+                        origin_xy=batch["origin_xy"][0],
+                        origin_theta=batch["origin_theta"][0],
                     )
                     train_images.append(
                         plot_simulator_state(

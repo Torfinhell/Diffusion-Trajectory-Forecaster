@@ -1,0 +1,6 @@
+_target_: src.diffusion_samplers.old.OldSampler
+steps: 100
+schedule: vp_linear
+clamp_val: 100.0
+t0: 1e-3
+t1: 2.0

@@ -1,0 +1,11 @@
+_target_: src.models.VBDDenoiser
+future_len: 80
+num_agents: 32
+time_past: 11
+num_feat: 9
+dim: 256
+ffn_dim: 512
+num_heads: 8
+kv_dim: 256
+num_steps: 50
+drop_attn: 0.1

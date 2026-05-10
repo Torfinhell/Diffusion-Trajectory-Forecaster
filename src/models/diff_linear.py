@@ -22,7 +22,8 @@ class DiffDenoiser(eqx.Module):
         self.fc2 = eqx.nn.Linear(hid_dim, hid_dim, key=k2)
         self.fc_out = eqx.nn.Linear(hid_dim, traj_dim, key=k3)
 
-    def __call__(self, t, x_t, cond):
+    def __call__(self, t, x_t, batch):
+        cond = batch["agent_past"]
         x = jnp.concatenate(
             [x_t.reshape(-1), cond.reshape(-1), jnp.atleast_1d(t)], axis=0
         )

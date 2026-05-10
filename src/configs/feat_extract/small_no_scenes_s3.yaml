@@ -9,7 +9,7 @@ data:
     creation:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000"
       waymax_conf_version: "WOD_1_3_1_TRAINING"
-      batch_size: 32
+      batch_size: 96
       num_states: 100
       max_num_objects: 32
       extract_scene: false

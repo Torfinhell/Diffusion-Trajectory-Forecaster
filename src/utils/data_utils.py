@@ -163,8 +163,10 @@ def batch_transform_polylines_to_global_frame(
     global_theta = wrap_angle(local_theta + origin_theta)
 
     global_polylines = jnp.stack([global_x, global_y, global_theta], axis=-1)
-    valid_mask = jnp.any(polylines[..., :3] != 0, axis=-1, keepdims=True)
-    global_polylines = jnp.where(valid_mask, global_polylines, 0.0)
+    valid_polyline = jnp.any(jnp.any(polylines[..., :3] != 0, axis=-1), axis=-1)
+    global_polylines = jnp.where(
+        valid_polyline[..., None, None], global_polylines, 0.0
+    )
     transformed = jnp.concatenate([global_polylines, polylines[..., 3:]], axis=-1)
     if squeeze_batch:
         return transformed[0]

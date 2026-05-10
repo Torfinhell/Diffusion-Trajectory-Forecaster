@@ -1,11 +1,17 @@
 _target_: src.models.DiffAttention
 se_args:
-  rnn_type: "simple_mlp" # one of "lstm" "mhsa" "simple_mlp"
-  # simple_mlp only needs: time_len, num_feat, out_dim
-  # mhsa/lstm also need: rnn_num_heads, sa_num_heads, drop_attn, mlp_dim, num_mlp_layers, num_agents, pos_emb_type, rope_theta
+  rnn_type: "mhsa" # one of "lstm" "mhsa"
+  rnn_num_heads: 1
+  sa_num_heads: 1
+  drop_attn: 0.1
+  mlp_dim: 60
+  num_mlp_layers: 2
+  num_agents: 32
   time_len: 11
   num_feat: 9
   out_dim: 40
+  pos_emb_type: "lookup" #one of "rope", "lookup", "None"
+  rope_theta: 0.1
 samlp_args:
   attn_dim: 160
   attn_num_heads: 1
@@ -23,7 +29,6 @@ camlp_args:
   out_dim: 160
   kv_dim: 40
 num_camlp: 4
-num_diffusion_steps: 50
 out_shape: [32, 80, 2]
 final_out_dim: 160
 debug_mlp_only: false

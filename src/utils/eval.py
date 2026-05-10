@@ -18,7 +18,11 @@ def _log_validation_visualizations(self, batch, sampled_trajs):
             if scenario is None:
                 continue
             pred_xy_plot = mask_pred_for_plot(sampled_trajs[i], batch["agents_coeffs"][i])
-            pred_xy_world = to_world_frame(pred_xy_plot, batch["origin_xy"][i])
+            pred_xy_world = to_world_frame(
+                pred_xy_plot,
+                origin_xy=batch["origin_xy"][i],
+                origin_theta=batch["origin_theta"][i],
+            )
             
             images.append(
                 plot_simulator_state(
@@ -51,12 +55,29 @@ def plot_vis_kwargs(model):
     return {k: v for k, v in model.vis.items() if k not in excluded}
 
 
-def to_world_frame(pred_xy, origin_xy):
+def to_world_frame(pred_xy, origin_xy, origin_theta=None):
     pred_xy = jnp.asarray(pred_xy)
     origin_xy = jnp.asarray(origin_xy)
+    if origin_theta is None:
+        origin_theta = jnp.zeros(origin_xy.shape[:-1], dtype=pred_xy.dtype)
+    else:
+        origin_theta = jnp.asarray(origin_theta, dtype=pred_xy.dtype)
+
+    local_x = pred_xy[..., 0]
+    local_y = pred_xy[..., 1]
     while origin_xy.ndim < pred_xy.ndim:
         origin_xy = origin_xy[..., None, :]
-    return pred_xy + origin_xy
+    while origin_theta.ndim < pred_xy.ndim - 1:
+        origin_theta = origin_theta[..., None]
+
+    cos_theta = jnp.cos(origin_theta)
+    sin_theta = jnp.sin(origin_theta)
+    global_x = local_x * cos_theta - local_y * sin_theta + origin_xy[..., 0]
+    global_y = local_x * sin_theta + local_y * cos_theta + origin_xy[..., 1]
+
+    pred_xy = pred_xy.at[..., 0].set(global_x)
+    pred_xy = pred_xy.at[..., 1].set(global_y)
+    return pred_xy
 
 
 def log_images(model, key, images):
@@ -169,7 +190,8 @@ def on_train_epoch_end(model):
                 )
                 first_pred_xy_world = to_world_frame(
                     first_pred_xy_plot,
-                    batch["origin_xy"][0],
+                    origin_xy=batch["origin_xy"][0],
+                    origin_theta=batch["origin_theta"][0],
                 )
                 train_images.append(
                     plot_simulator_state(
@@ -258,7 +280,9 @@ def on_validation_epoch_end(model):
                     first_pred_xy, batch["agents_coeffs"][0]
                 )
                 first_pred_xy_world = to_world_frame(
-                    first_pred_xy_plot, batch["origin_xy"][0]
+                    first_pred_xy_plot,
+                    origin_xy=batch["origin_xy"][0],
+                    origin_theta=batch["origin_theta"][0],
                 )
                 images.append(
                     plot_simulator_state(

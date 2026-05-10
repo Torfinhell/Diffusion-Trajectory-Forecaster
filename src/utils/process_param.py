@@ -24,7 +24,8 @@ def resolve_scheduler_decay_steps(hparams, dm) -> None:
     else:
         train_steps = min(train_steps, int(limit_train_batches))
 
-    scheduler_cfg.decay_steps = int(train_steps * hparams.trainer.num_epochs)
+    inner_steps = int(hparams.trainer.get("inner_steps", 1))
+    scheduler_cfg.decay_steps = int(train_steps * hparams.trainer.num_epochs * inner_steps)
 
 def process_hparams(hparams, print_hparams=True):
     OmegaConf.set_struct(hparams, False)

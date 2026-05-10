@@ -10,7 +10,7 @@ data:
       raw_data_url: "gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000"
       waymax_conf_version: "WOD_1_3_1_TRAINING"
       batch_size: 96
-      num_states: 2000
+      num_states: 600
       max_num_objects: 32
       extract_scene: false
       preprocessing:
@@ -26,9 +26,9 @@ data:
       waymax_conf_version: "WOD_1_3_1_TRAINING"
       batch_size: 32
       start_index: 0
-      num_states: 200
+      num_states: 1
       max_num_objects: 32
-      extract_scene: false
+      extract_scene: true
       preprocessing:
         current_index: 10
         use_full_agent_info: true

@@ -1,7 +1,7 @@
 train:
   _target_: torch.utils.data.DataLoader
-  batch_size: 1
-  num_workers: 1
+  batch_size: 80
+  num_workers: 3
   persistent_workers: true
   multiprocessing_context: spawn
   pin_memory: true
@@ -12,7 +12,7 @@ train:
 
 val:
   _target_: torch.utils.data.DataLoader
-  batch_size: 1
+  batch_size: 10
   num_workers: 0
   pin_memory: True
   shuffle: False
