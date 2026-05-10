@@ -1,6 +1,23 @@
 import jax
 import jax.numpy as jnp
 
+def denormalize_traj(traj, mean, var):
+    if mean.ndim == 1:
+        mean = mean[None, None, :]
+        std = jnp.sqrt(jnp.maximum(var, 1e-6))[None, None, :]
+    else:
+        mean = mean[:, None, None, :]
+        std = jnp.sqrt(jnp.maximum(var, 1e-6))[:, None, None, :]
+    return traj * std + mean
+
+def local_traj_stats(agent_future, agent_future_valid):
+    xy = jnp.asarray(agent_future[..., :2], dtype=jnp.float32)
+    valid = jnp.asarray(agent_future_valid[..., 0], dtype=xy.dtype)[..., None]
+    weight_sum = jnp.maximum(jnp.sum(valid, axis=(-2, -3), keepdims=False), 1.0)
+    mean = jnp.sum(xy * valid, axis=(-2, -3), keepdims=False) / weight_sum
+    var = jnp.sum(((xy - mean[None, None, :]) ** 2) * valid, axis=(-2, -3), keepdims=False) / weight_sum
+    return mean, var
+
 def wrap_angle(angle):
     return (angle + jnp.pi) % (2 * jnp.pi) - jnp.pi
 

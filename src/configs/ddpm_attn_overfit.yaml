@@ -1,0 +1,61 @@
+defaults:
+  - model: diffusion_attn_overfit
+  - dataloaders: basic
+  - feat_extract: small_no_scenes
+  - transforms: null
+  - logger: clearml
+  - metrics: all_metrics
+  - visual: default
+  - diffusion_sampler: ddpm
+  - _self_
+
+path_type: "xy"
+
+trainer:
+  debug_type: debug
+  path_type: ${path_type}
+  num_epochs: 1000
+  train_epoch_len: 1.0        # 1 batch per epoch → 1 step per epoch
+  val_epoch_len: 1.0
+  gradient_clip_val: 5
+  log_every_n_steps: 1
+  seed: 1
+  log_validation: true
+  inner_steps: 1
+  train_metric_batches: 1
+  val_metric_batches: 1
+  train_metric_every_n_epochs: 50
+  val_metric_every_n_epochs: 200
+  check_val_every_n_epoch: 20
+  samples_per_scene: 1
+  generate_every_epoch: 0
+  print_hparams: False
+  logging: "online"
+  load_best_checkpoint: False
+
+  enable_profiler: False
+  enable_jax_profiler: False
+  jax_profiler_dir: null
+  jax_profiler_start_step: 2
+  jax_profiler_num_steps: 3
+  proxy_val_loss:
+    enabled: false
+    step_stride: 5
+    include_last: true
+
+visual:
+  enable_visualization: false
+
+loss:
+  _target_: src.losses.MSELoss
+  coord_scale: 1.0
+  path_type: ${path_type}
+
+optimizer:
+  _target_: optax.adam
+
+scheduler:
+  _target_: optax.cosine_decay_schedule
+  init_value: 5e-3
+  decay_steps: 650
+  alpha: 0.01

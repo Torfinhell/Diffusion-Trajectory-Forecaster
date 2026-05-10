@@ -1,0 +1,26 @@
+_target_: src.models.DiffAttention
+se_args:
+  rnn_type: "simple_mlp"
+  time_len: 11
+  num_feat: 9
+  out_dim: 64
+samlp_args:
+  attn_dim: 160
+  attn_num_heads: 4
+  mlp_dim: 256
+  num_mlp_layers: 2
+  drop_attn: 0.0
+  out_dim: 160
+num_sa_mlp: 2
+camlp_args:
+  attn_dim: 160
+  attn_num_heads: 4
+  mlp_dim: 256
+  num_mlp_layers: 2
+  drop_attn: 0.0
+  out_dim: 160
+  kv_dim: 64
+num_camlp: 2
+num_diffusion_steps: 50
+out_shape: [32, 80, 2]
+final_out_dim: 160
