@@ -22,7 +22,7 @@ trainer:
 loss:
   _target_: src.losses.MSELoss
   coord_scale: 1.0
-  path_type: ${trainerpath_type}
+  path_type: ${trainer.path_type}
 
 optimizer:
   _target_: optax.adam
