@@ -1,6 +1,6 @@
 defaults:
   - model: diffusion_attn_overfit
-  - dataloaders: basic
+  - dataloaders: overfit
   - feat_extract: small_no_scenes
   - transforms: null
   - logger: clearml

@@ -163,11 +163,12 @@ class TransformerEncoder(eqx.Module):
 
 
 class FourierEmbedding(eqx.Module):
-    freqs: eqx.nn.Embedding
+    freqs: jnp.ndarray
     embed_dim: int
 
     def __init__(self, embed_dim, key):
         half = embed_dim // 2
+        self.embed_dim = embed_dim
         self.freqs = jnp.exp(
             jnp.arange(half) * -(jnp.log(10000.0) / (half - 1))
         )
