@@ -28,6 +28,7 @@ class BaseProfilerDebug(L.LightningModule):
         super().__init__()
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        jax.profiler.start_server(9999)
         self._seen_train_batches = 0
         self.start_step = int(start_step)
         self.stop_step = self.start_step + int(num_steps)
@@ -69,22 +70,19 @@ class BaseProfilerDebug(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         if self.start_step <= self.global_step_ <= self.stop_step:
-            with jax.profiler.trace(self.log_dir / "_step/train"):
-                with jax.profiler.StepTraceAnnotation(
-                    "train", step_num=self.global_step_
-                ):
-                    self._step(batch, "train")
+            with jax.profiler.StepTraceAnnotation("train", step_num=self.global_step_):
+                self._step(batch, "train")
         else:
             self._step(batch, "train")
         return None
 
     def validation_step(self, batch, batch_idx):
-        with jax.profiler.trace(self.log_dir / "_step/val"):
+        with jax.profiler.StepTraceAnnotation("val", step_num=self.global_step_):
             loss = self._step(batch, "val")
         return loss
 
     def test_step(self, batch, batch_idx):
-        with jax.profiler.trace(self.log_dir / "_step/test"):
+        with jax.profiler.StepTraceAnnotation("test", step_num=self.global_step_):
             return self._step(batch, "test")
 
     def _step(self, batch, kind):
