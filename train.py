@@ -27,7 +27,8 @@ def main(cfg) -> None:
         hparams.dataloaders,
     )
     dm.setup("fit")
-    resolve_scheduler_decay_steps(hparams, dm)
+    if hparams.trainer.get("train_epoch_len", None) is not None:
+        resolve_scheduler_decay_steps(hparams, dm)
 
     train_mode = cfg.trainer.get("train_mode", None)
     trainer_mapping = {

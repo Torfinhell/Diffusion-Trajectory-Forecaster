@@ -20,7 +20,7 @@ def resolve_scheduler_decay_steps(hparams, dm) -> None:
 
     train_steps = len(dm.train_dataloader())
     limit_train_batches = hparams.trainer.train_epoch_len
-    if limit_train_batches is not None:
+    if isinstance(limit_train_batches, float):
         train_steps = max(1, math.ceil(train_steps * limit_train_batches))
     else:
         train_steps = min(train_steps, int(limit_train_batches))
