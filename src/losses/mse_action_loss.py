@@ -27,8 +27,6 @@ class MSELoss(eqx.Module):
         agent_future,
         agents_coeffs,
         agent_future_valid,
-        x0_mean,
-        x0_var,
         key,
         debug=False,
         **kwargs,
@@ -45,11 +43,12 @@ class MSELoss(eqx.Module):
         timestep = jr.randint(
             timestep_key, shape=(), minval=0, maxval=diffusion_sampler.num_steps
         )
-        x0_mean = x0_mean[None, None, :]
-        x0_std = jnp.sqrt(jnp.maximum(x0_var, 1e-6))[None, None, :]
-        gt_xy_norm = (gt_xy - x0_mean) / x0_std
+        # TODO pre calculate on whole dataset mean and std
+        # x0_mean = x0_mean[None, None, :]
+        # x0_std = jnp.sqrt(jnp.maximum(x0_var, 1e-6))[None, None, :]
+        # gt_xy_norm = (gt_xy - x0_mean) / x0_std
         noise = jr.normal(noise_key, gt_xy.shape)
-        y = diffusion_sampler.add_noise(gt_xy_norm, noise, timestep)
+        y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
         # timestep_f = jnp.asarray(timestep, dtype=gt_xy.dtype) / jnp.maximum(
         #     diffusion_sampler.num_steps - 1, 1
         # )
@@ -58,7 +57,7 @@ class MSELoss(eqx.Module):
             y,
             **kwargs,
         )
-        err = (pred_xy - gt_xy_norm) ** 2
+        err = (pred_xy - gt_xy) ** 2
         weights = jnp.asarray(agents_coeffs, dtype=err.dtype)[
             ..., None, None
         ] * jnp.asarray(agent_future_valid, dtype=err.dtype)
@@ -69,7 +68,7 @@ class MSELoss(eqx.Module):
             valid_weights = jnp.asarray(agent_future_valid, dtype=gt_xy.dtype)
             stats = {
                 "noisy_abs_mean": masked_abs_mean(y, valid_weights),
-                "target_abs_mean": masked_abs_mean(gt_xy_norm, valid_weights),
+                "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
                 "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
                 "valid_ratio": jnp.mean(valid_weights),
             }

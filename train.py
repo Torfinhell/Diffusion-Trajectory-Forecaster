@@ -30,15 +30,12 @@ def main(cfg) -> None:
     if hparams.trainer.get("train_epoch_len", None) is not None:
         resolve_scheduler_decay_steps(hparams, dm)
 
-    train_mode = cfg.trainer.get("train_mode", None)
+    train_mode = cfg.trainer.get("train_mode", "train")
     trainer_mapping = {
-        None: BaseTrainer,
+        "train": BaseTrainer,
         "debug": BaseTrainerDebug,
         "profiler": BaseProfilerDebug,
     }
-
-    if train_mode not in trainer_mapping:
-        raise NotImplementedError(f"Debugging of type {train_mode} is not implemented")
     logger_name = logger.name if logger is not None else "default_run"
     jax_profiler_dir = f"./clearml/{logger_name}/jax_profiler"
     diff_trainer_kwargs = dict(

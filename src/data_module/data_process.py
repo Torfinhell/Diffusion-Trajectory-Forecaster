@@ -6,7 +6,6 @@ from src.utils.data_utils import (
     batch_transform_trajs_to_global_frame,
     batch_transform_trajs_to_local_frame,
     wrap_angle,
-    local_traj_stats,
 )
 
 COORD_SCALE = 1.0
@@ -130,9 +129,6 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
     is_valid = scenarios.object_metadata.is_valid
     agents_coeffs = jnp.where(is_modeled & is_interesting, 10.0, 1.0)
     agents_coeffs = jnp.where(is_valid, agents_coeffs, 0.0)
-
-    x0_mean, x0_var = local_traj_stats(agent_future, agent_future_valid)
-
     return {
         "agent_past": agent_past,
         "agent_future": agent_future,
@@ -142,8 +138,6 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
         "agents_types": scenarios.object_metadata.object_types,
         "origin_xy": origin_xyz[..., :2],
         "origin_theta": origin_theta,
-        "x0_mean": x0_mean,
-        "x0_var": x0_var,
     }
 
 
