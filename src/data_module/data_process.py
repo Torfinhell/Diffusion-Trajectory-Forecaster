@@ -7,7 +7,6 @@ from src.utils.data_utils import (
     batch_transform_trajs_to_local_frame,
     wrap_angle,
     inverse_kinematics,
-    local_traj_stats,
 )
 
 COORD_SCALE = 1.0

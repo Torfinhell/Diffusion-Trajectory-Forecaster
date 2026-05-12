@@ -159,4 +159,4 @@ class BaseProfilerDebug(L.LightningModule):
             model, diffusion_sampler, **sample, key=sample_key, debug=False
         )
         losses = jax.vmap(sample_loss_fn)(batch, loss_keys)
-        return jax.tree.map(lambda x: jnp.mean(x, axis=0), losses)["loss"]
+        return jnp.mean(losses, axis=0)

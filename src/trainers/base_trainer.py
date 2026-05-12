@@ -235,7 +235,7 @@ class BaseTrainer(L.LightningModule):
             model, diffusion_sampler, **sample, key=sample_key, debug=False
         )
         losses = jax.vmap(sample_loss_fn)(batch, loss_keys)
-        return jax.tree.map(lambda x: jnp.mean(x, axis=0), losses)["loss"]
+        return jnp.mean(losses, axis=0)
 
     def sample_one_sol(
         self,
@@ -256,9 +256,8 @@ class BaseTrainer(L.LightningModule):
         def scan_step(x_t, inputs):
             timestep, step_key = inputs
             model_output = model(
-                timestep_arr,
+                timestep,
                 x_t,
-                **batch,
                 **batch,
             )
             x_prev = diffusion_sampler.step(
