@@ -50,16 +50,24 @@ class MetricFnCollection:
         self,
         pred_xy: jnp.ndarray,
         gt_xy: jnp.ndarray,
-        agents_coeffs: jnp.ndarray,
         future_valid: jnp.ndarray,
+        agents_valid: jnp.ndarray | None = None,
+        agents_coeffs: jnp.ndarray | None = None,
         **_,
     ) -> dict[str, jnp.ndarray]:
+        if agents_valid is None:
+            if agents_coeffs is None:
+                raise ValueError(
+                    "MetricFnCollection requires `agents_valid` or `agents_coeffs`."
+                )
+            agents_valid = jnp.asarray(agents_coeffs) > 0
+
         res: dict[str, jnp.ndarray] = {}
         for name, fn in zip(self.metric_names, self.metric_fns):
             res[name.upper()] = fn(
                 pred_xy=pred_xy,
                 gt_xy=gt_xy,
-                agents_coeffs=agents_coeffs,
+                agents_valid=agents_valid,
                 future_valid=future_valid,
                 eps=self.eps,
             )

@@ -488,7 +488,7 @@ class SceneEncoder(eqx.Module):
 
     def __call__(
         self,
-        agent_past,
+        actions_past,
         polylines=None,  # local
         polylines_valid=None,
         traffic_light_points=None,
@@ -497,7 +497,7 @@ class SceneEncoder(eqx.Module):
         agents_types=None,
         **kwargs,
     ):
-        encoded_agents = self.agent_encoder(agent_past)
+        encoded_agents = self.agent_encoder(actions_past)
         encoded_map_lanes = (
             self.map_encoder(polylines)
             if self.map_encoder is not None and polylines is not None

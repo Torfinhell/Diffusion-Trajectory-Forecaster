@@ -9,7 +9,10 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricFnCollection
-from src.utils.data_utils import batch_transform_trajs_to_global_frame, denormalize_traj
+from src.utils.data_utils import (
+    batch_transform_trajs_to_global_frame,
+    predictions_to_local_xy,
+)
 from src.visualization.viz import plot_simulator_state
 
 
@@ -56,7 +59,6 @@ class BaseTrainer(L.LightningModule):
         )
         self.metrics_test = self.metrics_val
         self.model = instantiate(model, key=key_model)
-        self.path_type = trainer_cfg.path_type
         self.loss_fn = instantiate(loss)
         self.learning_rate_schedule = (
             instantiate(scheduler) if scheduler is not None else None
@@ -84,12 +86,21 @@ class BaseTrainer(L.LightningModule):
     def _update_metrics_for_batch(self, metrics: MetricFnCollection, batch):
         gt_xy_batch = batch["agent_future"][:, ..., :2]
         batch_size = gt_xy_batch.shape[0]
-        pred_xy_batch = self.sample_batch_sol(
+        sampled_pred_batch = self.sample_batch_sol(
             self.model,
             self.diffusion_sampler,
-            gt_xy_batch.shape[1:],
+            batch["actions_future"].shape[1:],
             batch,
             batch_size=batch_size,
+        )
+        pred_xy_batch, _ = predictions_to_local_xy(
+            sampled_pred_batch,
+            agent_past=batch["agent_past"],
+            origin_vel=batch["origin_vel"],
+            agent_future=batch["agent_future"],
+            actions_future=batch["actions_future"],
+            accel_scale=self.loss_fn.accel_scale,
+            yaw_rate_scale=self.loss_fn.yaw_rate_scale,
         )
         batch["pred_xy"] = pred_xy_batch
         batch["gt_xy"] = gt_xy_batch
@@ -245,8 +256,9 @@ class BaseTrainer(L.LightningModule):
         def scan_step(x_t, inputs):
             timestep, step_key = inputs
             model_output = model(
-                timestep,
+                timestep_arr,
                 x_t,
+                **batch,
                 **batch,
             )
             x_prev = diffusion_sampler.step(

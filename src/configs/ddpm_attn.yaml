@@ -10,8 +10,7 @@ defaults:
 
 trainer:
   train_mode: "train"
-  path_type: "xy"
-  num_epochs: 1000
+  num_epochs: 20
   train_epoch_len: 1.0
   val_epoch_len: 1.0
   log_validation: true
@@ -23,8 +22,8 @@ trainer:
 
 loss:
   _target_: src.losses.MSELoss
-  coord_scale: 1.0
-  path_type: ${trainer.path_type}
+  accel_scale: 1.0
+  yaw_rate_scale: 0.15
 
 optimizer:
   _target_: optax.adam

@@ -6,6 +6,8 @@ from src.utils.data_utils import (
     batch_transform_trajs_to_global_frame,
     batch_transform_trajs_to_local_frame,
     wrap_angle,
+    inverse_kinematics,
+    local_traj_stats,
 )
 
 COORD_SCALE = 1.0
@@ -68,8 +70,10 @@ def data_process_traffic_light(scenarios, current_index=10):
     }
 
 
-@jax.jit(static_argnames=["current_index", "use_full_agent_info"])
-def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
+@jax.jit(static_argnames=["current_index", "use_full_agent_info", "action_len"])
+def data_process_agent(
+    scenarios, current_index=10, use_full_agent_info=True, action_len=5
+):
     traj = scenarios.log_trajectory
 
     if use_full_agent_info:
@@ -81,9 +85,6 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
                 traj.vel_x,
                 traj.vel_y,
                 traj.yaw,
-                traj.length,
-                traj.width,
-                traj.height,
             ],
             axis=-1,
         )
@@ -116,12 +117,33 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
 
     valid_mask = traj.valid[..., None]
     agents_info = jnp.where(valid_mask & has_history[..., None, None], agents_info, 0.0)
+    origin_vel = jnp.take_along_axis(
+        agents_info[..., : current_index + 1, 3:5],
+        safe_last_valid_idx[..., None, None],
+        axis=-2,
+    ).squeeze(axis=-2)
+    origin_vel = jnp.where(has_history[..., None], origin_vel, 0.0)
 
     agent_past = agents_info[..., : current_index + 1, :]
     agent_future = agents_info[..., current_index + 1 :, :]
     # has_history is used here
     agent_future_valid = (
         traj.valid[..., current_index + 1 :, None] & has_history[..., None, None]
+    )
+
+    future_action_source = agents_info[..., current_index:, :]
+    future_action_valid = traj.valid[..., current_index:] & has_history[..., None]
+    actions_future, actions_future_valid = inverse_kinematics(
+        future_action_source,
+        future_action_valid,
+        action_len=action_len,
+    )
+
+    agent_past_valid = traj.valid[..., : current_index + 1, None] & has_history[..., None, None]
+    actions_past, _ = inverse_kinematics(
+        agent_past,
+        agent_past_valid,
+        action_len=action_len,
     )
 
     is_modeled = scenarios.object_metadata.is_modeled
@@ -133,11 +155,17 @@ def data_process_agent(scenarios, current_index=10, use_full_agent_info=True):
         "agent_past": agent_past,
         "agent_future": agent_future,
         "agent_future_valid": agent_future_valid,
+        "actions_future": actions_future,
+        "actions_future_valid": actions_future_valid,
+        "actions_past": actions_past,
         "agents_valid": has_history & is_valid,
         "agents_coeffs": agents_coeffs,
         "agents_types": scenarios.object_metadata.object_types,
         "origin_xy": origin_xyz[..., :2],
         "origin_theta": origin_theta,
+        "origin_vel": origin_vel,
+        "x0_mean": x0_mean,
+        "x0_var": x0_var,
     }
 
 
@@ -326,6 +354,7 @@ def calculate_relations(
     static_argnames=[
         "current_index",
         "use_full_agent_info",
+        "action_len",
         "max_polylines",
         "num_points_polyline",
         "extract_map",
@@ -337,6 +366,7 @@ def data_process_scenarios(
     scenarios,
     current_index=10,
     use_full_agent_info=True,
+    action_len=5,
     max_polylines=256,
     num_points_polyline=30,
     extract_map=True,
@@ -356,7 +386,10 @@ def data_process_scenarios(
             scenarios, current_index=current_index
         )
     agents_info = data_process_agent(
-        scenarios, current_index=current_index, use_full_agent_info=use_full_agent_info
+        scenarios,
+        current_index=current_index,
+        use_full_agent_info=use_full_agent_info,
+        action_len=action_len,
     )
     map_info = {}
     if extract_map:
@@ -386,6 +419,7 @@ def data_process_scenarios(
     static_argnames=[
         "current_index",
         "use_full_agent_info",
+        "action_len",
         "max_polylines",
         "num_points_polyline",
         "extract_map",
@@ -397,6 +431,7 @@ def data_process_scenarios_batch(
     scenarios,
     current_index=10,
     use_full_agent_info=True,
+    action_len=5,
     max_polylines=256,
     num_points_polyline=30,
     extract_map=True,
@@ -408,6 +443,7 @@ def data_process_scenarios_batch(
             scenario,
             current_index=current_index,
             use_full_agent_info=use_full_agent_info,
+            action_len=action_len,
             max_polylines=max_polylines,
             num_points_polyline=num_points_polyline,
             extract_map=extract_map,
