@@ -9,7 +9,7 @@ study:
   timeout: null
 
 objective:
-  metric: val/ADE
+  metric: val/loss
 
 trainer:
   num_epochs: 10
@@ -18,11 +18,10 @@ trainer:
 
 runtime:
   accelerator: gpu
-  show_progress: false
+  show_progress: true
 
 search:
   widths: [12, 16, 20, 24, 32]
-  scene_mlp_ratios: [1.0, 1.5, 2.0]
   attn_mlp_ratios: [1.0, 1.5, 2.0]
   mlp_multiple: 2
   num_sa_mlp:

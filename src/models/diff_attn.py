@@ -420,6 +420,7 @@ class ContextCombiner(eqx.Module):
 
 class SceneEncoder(eqx.Module):
     agent_encoder: AgentEncoder | SimpleAgentEncoder
+    type_embedding: eqx.nn.Embedding
     map_encoder: MapEncoder | None
     traffic_light_encoder: TrafficLightEncoder | None
     relation_encoder: RelationEncoder | None
@@ -436,13 +437,14 @@ class SceneEncoder(eqx.Module):
         traffic_light_embed_dim: int | None = None,
         rel_embed_dim: int | None = None,
         context_hidden_dim: int = 256,
+        num_agent_types: int = 16,
         extract_map: bool = True,
         extract_traffic: bool = True,
         extract_relations: bool = True,
         key=None,
         **kwargs,
     ):
-        agent_key, map_key, traffic_key, combiner_key = jr.split(key, 4)
+        agent_key, type_key, map_key, traffic_key, combiner_key = jr.split(key, 5)
         rel_key = jr.fold_in(key, 42)
         context_dim = int(agent_encoder_args["out_dim"])
         map_embed_dim = context_dim if map_embed_dim is None else int(map_embed_dim)
@@ -457,6 +459,11 @@ class SceneEncoder(eqx.Module):
             num_feat=int(agent_encoder_args["num_feat"]),
             out_dim=context_dim,
             key=agent_key,
+        )
+        self.type_embedding = eqx.nn.Embedding(
+            num_embeddings=int(num_agent_types),
+            embedding_size=context_dim,
+            key=type_key,
         )
         self.extract_map = bool(extract_map)
         self.extract_traffic = bool(extract_traffic)
@@ -498,6 +505,11 @@ class SceneEncoder(eqx.Module):
         **kwargs,
     ):
         encoded_agents = self.agent_encoder(actions_past)
+        if agents_types is not None:
+            type_ids = jnp.asarray(agents_types, dtype=jnp.int32)
+            type_ids = jnp.clip(type_ids, 0, self.type_embedding.num_embeddings - 1)
+            type_emb = jax.vmap(self.type_embedding)(type_ids)
+            encoded_agents = encoded_agents + type_emb
         encoded_map_lanes = (
             self.map_encoder(polylines)
             if self.map_encoder is not None and polylines is not None
