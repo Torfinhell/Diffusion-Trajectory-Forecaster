@@ -163,8 +163,6 @@ def data_process_agent(
         "origin_xy": origin_xyz[..., :2],
         "origin_theta": origin_theta,
         "origin_vel": origin_vel,
-        "x0_mean": x0_mean,
-        "x0_var": x0_var,
     }
 
 

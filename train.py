@@ -1,3 +1,4 @@
+import math
 import torch.multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
@@ -30,6 +31,11 @@ def main(cfg) -> None:
     if hparams.trainer.get("train_epoch_len", None) is not None:
         resolve_scheduler_decay_steps(hparams, dm)
 
+    train_epoch_len = hparams.trainer.train_epoch_len
+    if isinstance(train_epoch_len, float):
+        total_train_batches = len(dm.train_dataloader())
+        train_epoch_len = max(1, math.ceil(total_train_batches * train_epoch_len))
+
     train_mode = cfg.trainer.get("train_mode", "train")
     trainer_mapping = {
         "train": BaseTrainer,
@@ -58,15 +64,24 @@ def main(cfg) -> None:
 
     callbacks = [RichProgressBar(leave=True)]
     profiler = None
+    val_epoch_len = hparams.trainer.val_epoch_len
+    if isinstance(val_epoch_len, float):
+        total_val_batches = len(dm.val_dataloader())
+        val_epoch_len = max(1, math.ceil(total_val_batches * val_epoch_len))
+
+    check_val_every_n_epoch = hparams.trainer.check_val_every_n_epoch
+    val_check_interval = train_epoch_len * check_val_every_n_epoch
     trainer = Trainer(
         accelerator="gpu",
         max_epochs=hparams.trainer.num_epochs,
         logger=logger,
         callbacks=callbacks,
         enable_progress_bar=True,
-        limit_train_batches=hparams.trainer.train_epoch_len,
-        limit_val_batches=hparams.trainer.val_epoch_len,
-        check_val_every_n_epoch=hparams.trainer.check_val_every_n_epoch,
+        limit_train_batches=train_epoch_len,
+        limit_val_batches=val_epoch_len,
+        val_check_interval=val_check_interval,
+        check_val_every_n_epoch=None,
+        log_every_n_steps=hparams.trainer.get("log_every_n_steps", 1),
         profiler=profiler,
     )
 
