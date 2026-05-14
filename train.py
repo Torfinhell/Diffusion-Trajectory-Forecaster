@@ -9,7 +9,12 @@ from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
 from src.trainers import BaseProfilerDebug, BaseTrainer, BaseTrainerDebug
-from src.utils import log_run_metadata, process_hparams, resolve_scheduler_decay_steps
+from src.utils import (
+    load_best_checkpoint,
+    log_run_metadata,
+    process_hparams,
+    resolve_scheduler_decay_steps,
+)
 
 
 @hydra.main(version_base=None, config_name="ddpm_attn", config_path="src/configs")
@@ -81,11 +86,18 @@ def main(cfg) -> None:
         limit_val_batches=val_epoch_len,
         val_check_interval=val_check_interval,
         check_val_every_n_epoch=None,
+        limit_test_batches=hparams.trainer.get("test_epoch_len", 1.0),
         log_every_n_steps=hparams.trainer.get("log_every_n_steps", 1),
         profiler=profiler,
     )
 
     trainer.fit(diff_trainer, dm)
+
+    if bool(hparams.trainer.get("run_test_after_fit", False)):
+        if bool(hparams.trainer.get("test_with_best_checkpoint", True)):
+            load_best_checkpoint(diff_trainer)
+        dm.setup("test")
+        trainer.test(diff_trainer, datamodule=dm)
 
 
 if __name__ == "__main__":

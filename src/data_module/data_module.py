@@ -15,11 +15,16 @@ def tree_collate(states):
 
     if isinstance(sample, Mapping):
         metadata_keys = {"__key__", "__url__", "__local_path__"}
-        return {
-            key: tree_collate([state[key] for state in states])
-            for key in sample
-            if key not in metadata_keys
-        }
+        collated = {}
+        for key in sample:
+            if key in metadata_keys:
+                continue
+            values = [state[key] for state in states]
+            if key == "scenario":
+                collated[key] = list(values)
+            else:
+                collated[key] = tree_collate(values)
+        return collated
 
     if isinstance(sample, tuple):
         return tuple(tree_collate([state[idx] for state in states]) for idx in range(len(sample)))

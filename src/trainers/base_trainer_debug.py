@@ -9,6 +9,11 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricFnCollection
+from src.utils import (
+    load_best_checkpoint,
+    log_model_artifact,
+    maybe_save_best_checkpoint,
+)
 from src.utils.data_utils import (
     batch_transform_trajs_to_global_frame,
     predictions_to_local_xy,
@@ -47,6 +52,22 @@ class BaseTrainerDebug(L.LightningModule):
         self.grad_clip = None if grad_clip is None else float(grad_clip)
         if self.grad_clip is not None and self.grad_clip <= 0:
             self.grad_clip = None
+        self.best_checkpoint_metric = str(
+            self.trainer_cfg.get("best_checkpoint_metric", "val/loss")
+        )
+        self.best_checkpoint_mode = str(
+            self.trainer_cfg.get("best_checkpoint_mode", "min")
+        ).lower()
+        if self.best_checkpoint_mode not in {"min", "max"}:
+            raise ValueError(
+                "trainer.best_checkpoint_mode must be either 'min' or 'max'."
+            )
+        self.best_checkpoint_score = (
+            float("inf")
+            if self.best_checkpoint_mode == "min"
+            else float("-inf")
+        )
+        self.best_checkpoint_epoch = -1
         self.samples = 10
         self.global_step_ = 0
         self.metrics_train = (
@@ -169,7 +190,7 @@ class BaseTrainerDebug(L.LightningModule):
         safe_vmap_batch = {k: v for k, v in batch.items() if k != "scenario"}
         return jax.vmap(sample_fn)(sample_keys, safe_vmap_batch)
 
-    def _log_validation_visualizations(self, batch, sampled_trajs):
+    def _log_validation_visualizations(self, split, batch, sampled_trajs):
         enable_visualization = bool(self.vis.get("enable_visualization", False))
         has_scenarios = "scenario" in batch and batch["scenario"] is not None
         if not enable_visualization or not has_scenarios:
@@ -200,7 +221,7 @@ class BaseTrainerDebug(L.LightningModule):
             )
 
         if images:
-            self._log_images(self._image_log_name("val", "predictions"), images)
+            self._log_images(self._image_log_name(split, "predictions"), images)
 
     def _plot_vis_kwargs(self):
         excluded = {
@@ -243,7 +264,7 @@ class BaseTrainerDebug(L.LightningModule):
             1, int(self.trainer_cfg.get("train_metric_every_n_epochs", 1))
         )
         should_run_metrics = len(self.metrics_train) > 0 and (
-            (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
+            (self.current_epoch + 1)% metric_every == 0
         )
         if should_run_metrics:
             sampled_trajs, vals = self._update_metrics_for_batch(
@@ -258,14 +279,14 @@ class BaseTrainerDebug(L.LightningModule):
                 batch_size=batch["agent_future"].shape[0],
             )
             if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
-                self._log_validation_visualizations(batch, sampled_trajs)
+                self._log_validation_visualizations("train", batch, sampled_trajs)
         return None
 
     def validation_step(self, batch, batch_idx):
-        loss = self._step(batch, "val")
+        self._step(batch, "val")
         metric_every = max(1, int(self.trainer_cfg.get("val_metric_every_n_epochs", 1)))
         should_run_metrics = len(self.metrics_val) > 0 and (
-            (self.current_epoch + 1) % metric_every == 0 or self.current_epoch == 0
+            (self.current_epoch + 1) % metric_every == 0
         )
         if should_run_metrics:
             sampled_trajs, vals = self._update_metrics_for_batch(
@@ -280,11 +301,38 @@ class BaseTrainerDebug(L.LightningModule):
                 batch_size=batch["agent_future"].shape[0],
             )
             if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
-                self._log_validation_visualizations(batch, sampled_trajs)
-        return loss
+                self._log_validation_visualizations("val", batch, sampled_trajs)
+        return None
+
+    def on_validation_epoch_end(self):
+        if self.trainer.sanity_checking:
+            return
+        metrics = {}
+        for attr in ("callback_metrics", "logged_metrics", "progress_bar_metrics"):
+            values = getattr(self.trainer, attr, None)
+            metrics.update(values)
+        maybe_save_best_checkpoint(self, metrics)
+
+    def on_fit_end(self):
+        if bool(self.trainer_cfg.get("load_best_checkpoint", False)):
+            load_best_checkpoint(self)
+        log_model_artifact(self)
 
     def test_step(self, batch, batch_idx):
-        return self._step(batch, "test")
+        self._step(batch, "test")
+        sampled_trajs, vals = self._update_metrics_for_batch(
+                self.metrics_test, batch
+            )
+        log_dict = {f"test/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
+        self.log_dict(
+            log_dict,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch["agent_future"].shape[0],
+        )
+        if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
+            self._log_validation_visualizations("test", batch, sampled_trajs)
 
     def _step(self, batch, kind):
         is_train = kind == "train"
