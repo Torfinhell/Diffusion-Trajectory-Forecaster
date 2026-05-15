@@ -1,0 +1,36 @@
+_target_: src.models.DiffAttention
+extract_map: ${data.train.creation.preprocessing.extract_map}
+extract_traffic: ${data.train.creation.preprocessing.extract_traffic}
+extract_relations: ${data.train.creation.preprocessing.extract_relations}
+se_args:
+  rnn_type: "mhsa"
+  rnn_num_heads: 2
+  sa_num_heads: 2
+  drop_attn: 0.1
+  mlp_dim: 32
+  num_mlp_layers: 2
+  num_agents: 32
+  time_len: 2
+  num_feat: 2
+  out_dim: 20          # teacher: 80  (1/4)
+  pos_emb_type: "lookup"
+  rope_theta: 0.1
+samlp_args:
+  attn_dim: 80         # teacher: 320  (1/4)
+  attn_num_heads: 2    # teacher: 4
+  mlp_dim: 128         # teacher: 512  (1/4)
+  num_mlp_layers: 3
+  drop_attn: 0.0
+  out_dim: 80          # teacher: 320  (1/4)
+num_sa_mlp: 3          # same as teacher
+camlp_args:
+  attn_dim: 80         # teacher: 320  (1/4)
+  attn_num_heads: 2    # teacher: 4
+  mlp_dim: 128         # teacher: 512  (1/4)
+  num_mlp_layers: 3
+  drop_attn: 0.0
+  out_dim: 80          # teacher: 320  (1/4)
+  kv_dim: 20           # teacher: 80   (1/4, must match se_args.out_dim)
+num_camlp: 5           # same as teacher
+out_shape: [32, 16, 2]
+final_out_dim: 32

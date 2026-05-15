@@ -1,0 +1,55 @@
+defaults:
+  - model: diffusion_attn_student 
+  - /model@teacher_model: diffusion_attn_teacher
+  - dataloaders: overfit
+  - feat_extract: small_no_scenes
+  - logger: clearml
+  - metrics: all_metrics
+  - visual: default
+  - diffusion_sampler: ddpm
+  - _self_
+
+distill:
+  teacher_checkpoint: "checkpoints/best45/best.eqx"
+
+  lambdas:
+    gt: 1.0
+    scene: 0.1
+    sa: 0.1
+    ca: 0.1
+    out: 0.5
+
+trainer:
+  train_mode: "train"
+  num_epochs: 15
+  train_epoch_len: 1.0
+  val_epoch_len: 1.0
+  log_validation: true
+  gradient_clip_val: 5
+  seed: 1
+  train_metric_every_n_epochs: 10
+  val_metric_every_n_epochs: 5
+  check_val_every_n_epoch: 1
+  print_hparams: False
+  logging: "online"
+
+  best_checkpoint_metric: "val/loss"
+  best_checkpoint_mode: "min"
+  load_best_checkpoint: false
+
+  run_test_after_fit: false
+  test_with_best_checkpoint: true
+
+
+loss:
+  accel_scale: 1.0
+  yaw_rate_scale: 0.15
+
+optimizer:
+  _target_: optax.adam
+
+scheduler:
+  _target_: optax.cosine_decay_schedule
+  init_value: 5e-3
+  decay_steps: 650
+  alpha: 0.01

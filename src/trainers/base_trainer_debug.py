@@ -82,7 +82,7 @@ class BaseTrainerDebug(L.LightningModule):
         )
         self.metrics_test = self.metrics_val
         self.model = instantiate(model, key=key_model)
-        self.loss_fn = instantiate(loss)
+        self.loss_fn = loss if isinstance(loss, eqx.Module) else instantiate(loss)
         self.learning_rate_schedule = (
             instantiate(scheduler) if scheduler is not None else None
         )
@@ -94,7 +94,11 @@ class BaseTrainerDebug(L.LightningModule):
             optimizer_args["learning_rate"] = self.learning_rate_schedule
         optimizer_transform = instantiate(optimizer, **optimizer_args)
         self.optim = self.clip_optimizer(optimizer_transform)
-        self.opt_state = self.optim.init(eqx.filter(self.model, eqx.is_inexact_array))
+        if hasattr(self.loss_fn, "get_trainable"):
+            trainable = self.loss_fn.get_trainable(self.model)
+        else:
+            trainable = eqx.filter(self.model, eqx.is_inexact_array)
+        self.opt_state = self.optim.init(trainable)
 
     def configure_optimizers(self):
         return []
@@ -355,11 +359,13 @@ class BaseTrainerDebug(L.LightningModule):
         if is_train:
             self.model = step_out["model"]
             self.opt_state = step_out["opt_state"]
+            if "loss_fn" in step_out:
+                self.loss_fn = step_out["loss_fn"]
 
         log_output = {
             f"{kind}/{key}": float(jnp.asarray(value))
             for key, value in step_out.items()
-            if key not in {"model", "opt_state"} and value is not None
+            if key not in {"model", "opt_state", "loss_fn"} and value is not None
         }
 
         self.log_dict(
@@ -386,18 +392,42 @@ class BaseTrainerDebug(L.LightningModule):
         opt_state=None,
         opt_update=None,
     ):
-        # TODO how to sample steps?
+        has_joint = hasattr(loss_fn, "get_trainable")
+
         if train:
-            grad_fn = eqx.filter_value_and_grad(
-                BaseTrainerDebug.batch_loss_fn, has_aux=True
-            )
-            (loss, stats), grads = grad_fn(
-                model, diffusion_sampler, loss_fn, batch, key
-            )
-            grad_norm = optax.global_norm(grads)
-            updates, opt_state = opt_update(grads, opt_state)
-            update_norm = optax.global_norm(updates)
-            model = eqx.apply_updates(model, updates)
+            if has_joint:
+                # Differentiate w.r.t. (model, loss_fn) as a single tuple so
+                # projectors receive gradients.
+                def joint_loss_fn(pair):
+                    model_, loss_fn_ = pair
+                    return BaseTrainerDebug.batch_loss_fn(
+                        model_, diffusion_sampler, loss_fn_, batch, key
+                    )
+                grad_fn = eqx.filter_value_and_grad(joint_loss_fn, has_aux=True)
+                (loss, stats), (model_grads, loss_fn_grads) = grad_fn((model, loss_fn))
+                # Pack grads to match opt_state structure: (model, projectors)
+                proj_grads = loss_fn_grads.projectors
+                packed_grads = (model_grads, proj_grads)
+                grad_norm = optax.global_norm(packed_grads)
+                packed_updates, opt_state = opt_update(packed_grads, opt_state)
+                model_updates, proj_updates = packed_updates
+                update_norm = optax.global_norm(packed_updates)
+                model = eqx.apply_updates(model, model_updates)
+                loss_fn = eqx.tree_at(
+                    lambda l: l.projectors, loss_fn,
+                    eqx.apply_updates(loss_fn.projectors, proj_updates),
+                )
+            else:
+                grad_fn = eqx.filter_value_and_grad(
+                    BaseTrainerDebug.batch_loss_fn, has_aux=True
+                )
+                (loss, stats), grads = grad_fn(
+                    model, diffusion_sampler, loss_fn, batch, key
+                )
+                grad_norm = optax.global_norm(grads)
+                updates, opt_state = opt_update(grads, opt_state)
+                update_norm = optax.global_norm(updates)
+                model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
             loss, stats = BaseTrainerDebug.batch_loss_fn(
@@ -417,6 +447,8 @@ class BaseTrainerDebug(L.LightningModule):
         if train:
             step_out["model"] = model
             step_out["opt_state"] = opt_state
+            if has_joint:
+                step_out["loss_fn"] = loss_fn
         return step_out
 
     @eqx.filter_jit
@@ -435,5 +467,6 @@ class BaseTrainerDebug(L.LightningModule):
             )
 
         losses, stats = jax.vmap(mapped_fn)(batch, loss_keys)
+
         mean_stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
         return jnp.mean(losses, axis=0), mean_stats

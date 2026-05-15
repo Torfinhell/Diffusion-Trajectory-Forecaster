@@ -197,19 +197,13 @@ class Dataset:
         if not extract_scene:
             return processed_samples
 
-        if split == "val":
-            scenarios_added = 0
-            samples = []
-            for state, processed in zip(states_batch, processed_samples, strict=True):
-                scenario = state if scenarios_added < 5 else None
-                samples.append({"scenario": scenario, **processed})
-                scenarios_added += 1
-            return samples
-
-        return [
-            {"scenario": state, **processed}
-            for state, processed in zip(states_batch, processed_samples, strict=True)
-        ]
+        scenarios_added = 0
+        samples = []
+        for state, processed in zip(states_batch, processed_samples, strict=True):
+            scenario = state if scenarios_added < 5 else None
+            samples.append({"scenario": scenario, **processed})
+            scenarios_added += 1
+        return samples
 
     def iter_processed_samples(
         self,

@@ -1,0 +1,36 @@
+_target_: src.models.DiffAttention
+extract_map: ${data.train.creation.preprocessing.extract_map}
+extract_traffic: ${data.train.creation.preprocessing.extract_traffic}
+extract_relations: ${data.train.creation.preprocessing.extract_relations}
+se_args:
+  rnn_type: "mhsa" # one of "lstm" "mhsa"
+  rnn_num_heads: 2
+  sa_num_heads: 2
+  drop_attn: 0.1
+  mlp_dim: 128
+  num_mlp_layers: 2
+  num_agents: 32
+  time_len: 2
+  num_feat: 2
+  out_dim: 80
+  pos_emb_type: "lookup" #one of "rope", "lookup", "None"
+  rope_theta: 0.1
+samlp_args:
+  attn_dim: 320
+  attn_num_heads: 4
+  mlp_dim: 512
+  num_mlp_layers: 3
+  drop_attn: 0.0
+  out_dim: 320
+num_sa_mlp: 3
+camlp_args:
+  attn_dim: 320
+  attn_num_heads: 4
+  mlp_dim: 512
+  num_mlp_layers: 3
+  drop_attn: 0.0
+  out_dim: 320
+  kv_dim: 80
+num_camlp: 5
+out_shape: [32, 16, 2]
+final_out_dim: 32
