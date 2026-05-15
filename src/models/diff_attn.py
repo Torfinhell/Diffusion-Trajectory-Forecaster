@@ -656,7 +656,9 @@ class DiffAttention(eqx.Module):
         )
         self.out_shape = tuple(out_shape)
 
-    def __call__(self, t_noise, x_t, **batch_kwargs):
+    def _forward_impl(
+        self, t_noise, x_t, *, collect_features: bool, **batch_kwargs
+    ):
         if x_t.ndim == 3:
             x_t = x_t[None, ...]
         elif x_t.ndim != 4:
@@ -681,58 +683,39 @@ class DiffAttention(eqx.Module):
         cross_attn_mask = jnp.diag(valid_agents) & valid_context[None, :]
 
         x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
+        sa_features = [] if collect_features else None
         for layer in self.sa_mlp_layers:
             x_t = layer(x_t, attn_mask=self_attn_mask)
             x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
+            if collect_features:
+                sa_features.append(x_t)
+
+        ca_features = [] if collect_features else None
         for layer in self.ca_mlp_layers:
             x_t = layer(x_t, kv_cond, attn_mask=cross_attn_mask)
             x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
-
-        return jax.vmap(self.mlp_out)(x_t).reshape(self.out_shape)
-
-    def __call_with_features__(
-        self, t_noise, x_t, **batch_kwargs
-    ) -> tuple[jnp.ndarray, dict]:
-        if x_t.ndim == 3:
-            x_t = x_t[None, ...]
-        elif x_t.ndim != 4:
-            raise ValueError(
-                f"DiffAttention expected x_t with 3 or 4 dims, got {x_t.shape}"
-            )
-
-        encoder_outputs = self.encoder(**batch_kwargs)
-        kv_cond = encoder_outputs["encodings"]
-        context_mask = encoder_outputs["context_mask"]
-        agents_mask = encoder_outputs["agents_mask"]
-
-        _, a, _, _ = x_t.shape
-        x_t_flat = x_t.reshape(a, -1)
-        t_emb = self.noise_level_embedding(t_noise)
-        x_t = jax.vmap(self.input_proj)(x_t_flat)
-        x_t = x_t + t_emb
-
-        valid_agents = ~agents_mask
-        valid_context = ~context_mask
-        self_attn_mask = valid_agents[:, None] & valid_agents[None, :]
-        cross_attn_mask = jnp.diag(valid_agents) & valid_context[None, :]
-
-        x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
-        sa_features = []
-        for layer in self.sa_mlp_layers:
-            x_t = layer(x_t, attn_mask=self_attn_mask)
-            x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
-            sa_features.append(x_t)
-
-        ca_features = []
-        for layer in self.ca_mlp_layers:
-            x_t = layer(x_t, kv_cond, attn_mask=cross_attn_mask)
-            x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
-            ca_features.append(x_t)
+            if collect_features:
+                ca_features.append(x_t)
 
         out = jax.vmap(self.mlp_out)(x_t).reshape(self.out_shape)
+        if not collect_features:
+            return out
+
         features = {
             "kv_cond": kv_cond,
             "sa_features": sa_features,
             "ca_features": ca_features,
         }
         return out, features
+
+    def __call__(self, t_noise, x_t, **batch_kwargs):
+        return self._forward_impl(
+            t_noise, x_t, collect_features=False, **batch_kwargs
+        )
+
+    def __call_with_features__(
+        self, t_noise, x_t, **batch_kwargs
+    ) -> tuple[jnp.ndarray, dict]:
+        return self._forward_impl(
+            t_noise, x_t, collect_features=True, **batch_kwargs
+        )
