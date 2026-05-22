@@ -11,12 +11,12 @@ defaults:
 
 trainer:
   teacher_checkpoint: "checkpoints/best45/best.eqx"
-  train_mode: "debug" #hardcoded
+  train_mode: distillation
   num_epochs: 15
   train_epoch_len: 1.0
   val_epoch_len: 1.0
   log_validation: true
-  gradient_clip_val: 5
+  grad_clip: 5
   seed: 1
   train_metric_every_n_epochs: 10
   val_metric_every_n_epochs: 5
@@ -38,6 +38,11 @@ dataset:
 
 loss:
   _target_: src.losses.distillation_loss.KDLoss
+  distill_features:
+    - kv_cond
+    - sa
+    - ca
+    - out
   lambdas:
     gt: 1.0
     scene: 0.1

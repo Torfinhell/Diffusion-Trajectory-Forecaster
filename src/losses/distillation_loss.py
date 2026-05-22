@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from typing import Optional
 
 import equinox as eqx
@@ -7,23 +8,23 @@ import jax.random as jr
 
 from src.utils.data_utils import predictions_to_local_xy
 
+# feat_key -> (tensor name in feature dict, projector method, lambda key)
+DISTILL_FEATURE_SPECS = {
+    "kv_cond": ("kv_cond", "project_kv_cond", "scene"),
+    "sa": ("sa_features", "project_sa", "sa"),
+    "ca": ("ca_features", "project_ca", "ca"),
+    "out": (None, None, "out"),
+}
+
 
 class KDProjectors(eqx.Module):
-    """Linear projectors that map student feature dims → teacher feature dims.
-
-    Projectors are jointly trained with the student and discarded after distillation.
-    """
+    """Linear projectors that map student feature dims → teacher feature dims."""
 
     kv_cond_proj: Optional[eqx.nn.Linear]
     sa_projs: list
     ca_projs: list
 
     def __init__(self, student_dims: dict, teacher_dims: dict, key):
-        """
-        Args:
-            student_dims: {"kv_cond": int, "sa": list[int], "ca": list[int]}
-            teacher_dims: {"kv_cond": int, "sa": list[int], "ca": list[int]}
-        """
         kv_key, sa_key, ca_key = jr.split(key, 3)
 
         s_kv = student_dims["kv_cond"]
@@ -65,35 +66,31 @@ class KDProjectors(eqx.Module):
 
 
 class KDLoss(eqx.Module):
-    """Knowledge-distillation loss with the same signature as MSELoss."""
+    """Knowledge-distillation loss; pass teacher and projectors at call time."""
 
-    teacher: list  # [DiffAttention]
-    projectors: KDProjectors
     accel_scale: float
     yaw_rate_scale: float
-    lambdas: dict  # {"gt", "scene", "sa", "ca", "out"}
+    lambdas: dict
+    distill_features: frozenset[str]
 
     def __init__(
         self,
-        teacher: eqx.Module,
-        projectors: KDProjectors,
         lambdas: dict,
+        distill_features: Iterable[str],
         accel_scale: float = 1.0,
         yaw_rate_scale: float = 0.15,
     ):
-        self.teacher = [teacher]
-        self.projectors = projectors
+        unknown = set(distill_features) - DISTILL_FEATURE_SPECS.keys()
+        if unknown:
+            raise ValueError(f"Unknown distill_features: {sorted(unknown)}")
+        self.lambdas = lambdas
+        self.distill_features = frozenset(distill_features)
         self.accel_scale = accel_scale
         self.yaw_rate_scale = yaw_rate_scale
-        self.lambdas = lambdas
-
-    # Called once during __init__ of BaseTrainerDebug to build opt_state
-    def get_trainable(self, student_model):
-        return eqx.filter((student_model, self.projectors), eqx.is_inexact_array)
 
     def __call__(
         self,
-        model,  # student DiffAttention
+        model,
         diffusion_sampler,
         agent_past,
         agent_future,
@@ -101,6 +98,8 @@ class KDLoss(eqx.Module):
         agent_future_valid,
         actions_future,
         key,
+        teacher=None,
+        projectors: KDProjectors | None = None,
         debug=False,
         **kwargs,
     ):
@@ -117,18 +116,19 @@ class KDLoss(eqx.Module):
         noise = jr.normal(noise_key, gt_actions.shape)
         noisy_actions = diffusion_sampler.add_noise(gt_actions_norm, noise, timestep)
 
-        teacher_out, teacher_feats = self.teacher[0].__call_with_features__(
-            timestep, noisy_actions, **kwargs
-        )
-        teacher_out = jax.lax.stop_gradient(teacher_out)
-        teacher_feats = jax.lax.stop_gradient(teacher_feats)
-
-        # Student forward
         student_out, student_feats = model.__call_with_features__(
             timestep, noisy_actions, **kwargs
         )
 
-        # gt trajectory loss
+        teacher_out = None
+        teacher_feats = None
+        if teacher is not None:
+            teacher_out, teacher_feats = teacher.__call_with_features__(
+                timestep, noisy_actions, **kwargs
+            )
+            teacher_out = jax.lax.stop_gradient(teacher_out)
+            teacher_feats = jax.lax.stop_gradient(teacher_feats)
+
         pred_xy, _ = predictions_to_local_xy(
             student_out,
             agent_past=agent_past,
@@ -148,53 +148,46 @@ class KDLoss(eqx.Module):
         weights = jnp.broadcast_to(weights, err.shape)
         l_gt = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
 
-        # kv_cond loss
-        s_kv = self.projectors.project_kv_cond(student_feats["kv_cond"])
-        l_scene = jnp.mean((s_kv - teacher_feats["kv_cond"]) ** 2)
+        stats = {"L_gt": l_gt}
+        total = self.lambdas["gt"] * l_gt
 
-        # sa feature loss
-        t_sa = teacher_feats["sa_features"]
-        s_sa = student_feats["sa_features"]
-        if len(t_sa) > 0:
-            sa_losses = [
-                jnp.mean((self.projectors.project_sa(i, s_sa[i]) - t_sa[i]) ** 2)
-                for i in range(len(t_sa))
-            ]
-            l_sa = sum(sa_losses) / len(sa_losses)
-        else:
-            l_sa = jnp.zeros(())
+        if teacher is None:
+            if debug:
+                return total, stats
+            return total
 
-        # ca feature loss
-        t_ca = teacher_feats["ca_features"]
-        s_ca = student_feats["ca_features"]
-        if len(t_ca) > 0:
-            ca_losses = [
-                jnp.mean((self.projectors.project_ca(i, s_ca[i]) - t_ca[i]) ** 2)
-                for i in range(len(t_ca))
-            ]
-            l_ca = sum(ca_losses) / len(ca_losses)
-        else:
-            l_ca = jnp.zeros(())
+        if projectors is None:
+            raise ValueError(
+                "projectors are required when teacher is set for distillation"
+            )
 
-        # Output loss
-        l_out = jnp.mean((student_out - teacher_out) ** 2)
+        for feat_key in self.distill_features:
+            tensor_name, proj_method, lam_key = DISTILL_FEATURE_SPECS[feat_key]
+            lam = self.lambdas.get(lam_key, 0.0)
+            if lam == 0.0:
+                continue
 
-        lam = self.lambdas
-        total = (
-            lam["gt"] * l_gt
-            + lam["scene"] * l_scene
-            + lam["sa"] * l_sa
-            + lam["ca"] * l_ca
-            + lam["out"] * l_out
-        )
+            if feat_key == "out":
+                loss_term = jnp.mean((student_out - teacher_out) ** 2)
+            elif feat_key == "kv_cond":
+                s_feat = projectors.project_kv_cond(student_feats[tensor_name])
+                loss_term = jnp.mean((s_feat - teacher_feats[tensor_name]) ** 2)
+            else:
+                t_list = teacher_feats[tensor_name]
+                s_list = student_feats[tensor_name]
+                if len(t_list) == 0:
+                    loss_term = jnp.zeros(())
+                else:
+                    project = getattr(projectors, proj_method)
+                    layer_losses = [
+                        jnp.mean((project(i, s_list[i]) - t_list[i]) ** 2)
+                        for i in range(len(t_list))
+                    ]
+                    loss_term = sum(layer_losses) / len(layer_losses)
+
+            stats[f"L_{lam_key}"] = loss_term
+            total = total + lam * loss_term
 
         if debug:
-            stats = {
-                "L_gt": l_gt,
-                "L_scene": l_scene,
-                "L_sa": l_sa,
-                "L_ca": l_ca,
-                "L_out": l_out,
-            }
             return total, stats
         return total

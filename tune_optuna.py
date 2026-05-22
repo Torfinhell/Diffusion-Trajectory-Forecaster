@@ -1,5 +1,4 @@
 import json
-import math
 from copy import deepcopy
 from pathlib import Path
 
@@ -11,18 +10,12 @@ from omegaconf import OmegaConf
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.trainers import BaseTrainerDebug
-from src.utils.process_param import process_hparams, resolve_scheduler_decay_steps
+from src.trainers import BaseTrainer
+from src.utils import process_hparams, resolve_epoch_len, resolve_scheduler_decay_steps
 
 
 def _round_to_multiple(value: int, multiple: int) -> int:
     return max(multiple, int(round(value / multiple) * multiple))
-
-
-def _resolve_batch_limit(limit, total_batches: int) -> int:
-    if isinstance(limit, float):
-        return max(1, math.ceil(total_batches * limit))
-    return min(total_batches, int(limit))
 
 
 def apply_scaled_model_params(cfg, trial: optuna.Trial, tune_cfg) -> None:
@@ -102,15 +95,15 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
     dm = DiffusionTrackerDataModule(hparams.dataset.data, hparams.dataloaders)
     dm.setup("fit")
     resolve_scheduler_decay_steps(hparams, dm)
-    train_epoch_len = _resolve_batch_limit(
+    train_epoch_len = resolve_epoch_len(
         hparams.trainer.train_epoch_len, len(dm.train_dataloader())
     )
-    val_epoch_len = _resolve_batch_limit(
+    val_epoch_len = resolve_epoch_len(
         hparams.trainer.val_epoch_len, len(dm.val_dataloader())
     )
     val_check_interval = train_epoch_len * int(hparams.trainer.check_val_every_n_epoch)
 
-    diff_model = BaseTrainerDebug(
+    diff_model = BaseTrainer(
         seed=hparams.trainer.seed,
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
@@ -119,8 +112,9 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
         optimizer=hparams.optimizer,
         scheduler=hparams.scheduler,
         diffusion_sampler=hparams.diffusion_sampler,
-        grad_clip=hparams.trainer.gradient_clip_val,
+        grad_clip=hparams.trainer.grad_clip,
         trainer_cfg=hparams.trainer,
+        loss_returns_stats=True,
     )
 
     trainer = Trainer(
