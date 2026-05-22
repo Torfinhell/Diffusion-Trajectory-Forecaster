@@ -1,0 +1,7 @@
+preprocessing:
+  current_index: 10
+  use_full_agent_info: false
+  extract_map: true
+  extract_traffic: true
+  extract_relations: true
+  extract_actions: true

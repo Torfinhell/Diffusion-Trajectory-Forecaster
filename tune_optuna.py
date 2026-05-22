@@ -1,5 +1,5 @@
-import math
 import json
+import math
 from copy import deepcopy
 from pathlib import Path
 
@@ -99,10 +99,7 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
 
 def objective(tune_cfg, trial: optuna.Trial) -> float:
     hparams = build_hparams(tune_cfg, trial)
-    dm = DiffusionTrackerDataModule(
-        hparams.data,
-        hparams.dataloaders,
-    )
+    dm = DiffusionTrackerDataModule(hparams.dataset.data, hparams.dataloaders)
     dm.setup("fit")
     resolve_scheduler_decay_steps(hparams, dm)
     train_epoch_len = _resolve_batch_limit(
@@ -111,9 +108,7 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
     val_epoch_len = _resolve_batch_limit(
         hparams.trainer.val_epoch_len, len(dm.val_dataloader())
     )
-    val_check_interval = (
-        train_epoch_len * int(hparams.trainer.check_val_every_n_epoch)
-    )
+    val_check_interval = train_epoch_len * int(hparams.trainer.check_val_every_n_epoch)
 
     diff_model = BaseTrainerDebug(
         seed=hparams.trainer.seed,

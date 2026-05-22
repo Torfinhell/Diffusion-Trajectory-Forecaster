@@ -7,8 +7,6 @@ train:
   pin_memory: true
   shuffle: False
   drop_last: True
-  chunk_sampler:
-    enabled: False
 
 val:
   _target_: torch.utils.data.DataLoader

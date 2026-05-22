@@ -5,8 +5,8 @@ from src.utils.data_utils import (
     batch_transform_polylines_to_local_frame,
     batch_transform_trajs_to_global_frame,
     batch_transform_trajs_to_local_frame,
-    wrap_angle,
     inverse_kinematics,
+    wrap_angle,
 )
 
 COORD_SCALE = 1.0
@@ -71,7 +71,11 @@ def data_process_traffic_light(scenarios, current_index=10):
 
 @jax.jit(static_argnames=["current_index", "use_full_agent_info", "action_len"])
 def data_process_agent(
-    scenarios, current_index=10, use_full_agent_info=True, action_len=5
+    scenarios,
+    current_index=10,
+    use_full_agent_info=True,
+    action_len=5,
+    extract_actions=True,
 ):
     traj = scenarios.log_trajectory
 
@@ -129,34 +133,15 @@ def data_process_agent(
     agent_future_valid = (
         traj.valid[..., current_index + 1 :, None] & has_history[..., None, None]
     )
-
-    future_action_source = agents_info[..., current_index:, :]
-    future_action_valid = traj.valid[..., current_index:] & has_history[..., None]
-    actions_future, actions_future_valid = inverse_kinematics(
-        future_action_source,
-        future_action_valid,
-        action_len=action_len,
-    )
-
-    agent_past_valid = traj.valid[..., : current_index + 1, None] & has_history[..., None, None]
-    actions_past, _ = inverse_kinematics(
-        agent_past,
-        agent_past_valid,
-        action_len=action_len,
-    )
-
     is_modeled = scenarios.object_metadata.is_modeled
     is_interesting = scenarios.object_metadata.objects_of_interest
     is_valid = scenarios.object_metadata.is_valid
     agents_coeffs = jnp.where(is_modeled & is_interesting, 10.0, 1.0)
     agents_coeffs = jnp.where(is_valid, agents_coeffs, 0.0)
-    return {
+    agent_dict = {
         "agent_past": agent_past,
         "agent_future": agent_future,
         "agent_future_valid": agent_future_valid,
-        "actions_future": actions_future,
-        "actions_future_valid": actions_future_valid,
-        "actions_past": actions_past,
         "agents_valid": has_history & is_valid,
         "agents_coeffs": agents_coeffs,
         "agents_types": scenarios.object_metadata.object_types,
@@ -164,6 +149,31 @@ def data_process_agent(
         "origin_theta": origin_theta,
         "origin_vel": origin_vel,
     }
+    if extract_actions:
+        future_action_source = agents_info[..., current_index:, :]
+        future_action_valid = traj.valid[..., current_index:] & has_history[..., None]
+        actions_future, actions_future_valid = inverse_kinematics(
+            future_action_source,
+            future_action_valid,
+            action_len=action_len,
+        )
+
+        agent_past_valid = (
+            traj.valid[..., : current_index + 1, None] & has_history[..., None, None]
+        )
+        actions_past, _ = inverse_kinematics(
+            agent_past,
+            agent_past_valid,
+            action_len=action_len,
+        )
+        agent_dict.update(
+            {
+                "actions_past": actions_past,
+                "actions_future": actions_future,
+                "actions_future_valid": actions_future_valid,
+            }
+        )
+    return agent_dict
 
 
 @jax.jit(static_argnames=["max_polylines", "num_points_polyline"])
@@ -369,6 +379,7 @@ def data_process_scenarios(
     extract_map=True,
     extract_traffic=True,
     extract_relations=True,
+    extract_actions=True,
 ):
     assert not extract_relations or (
         extract_map and extract_traffic
@@ -387,6 +398,7 @@ def data_process_scenarios(
         current_index=current_index,
         use_full_agent_info=use_full_agent_info,
         action_len=action_len,
+        extract_actions=extract_actions,
     )
     map_info = {}
     if extract_map:

@@ -1,4 +1,3 @@
-import math
 import torch.multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
@@ -9,12 +8,7 @@ from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
 from src.trainers import BaseProfilerDebug, BaseTrainer, BaseTrainerDebug
-from src.utils import (
-    load_best_checkpoint,
-    log_run_metadata,
-    process_hparams,
-    resolve_scheduler_decay_steps,
-)
+from src.utils import log_run_metadata, process_hparams, resolve_scheduler_decay_steps
 
 
 @hydra.main(version_base=None, config_name="ddpm_attn", config_path="src/configs")
@@ -28,18 +22,10 @@ def main(cfg) -> None:
     if logger is not None:
         log_run_metadata(logger, hparams)
 
-    dm = DiffusionTrackerDataModule(
-        hparams.data,
-        hparams.dataloaders,
-    )
+    dm = DiffusionTrackerDataModule(hparams.dataset.data, hparams.dataloaders)
     dm.setup("fit")
     if hparams.trainer.get("train_epoch_len", None) is not None:
         resolve_scheduler_decay_steps(hparams, dm)
-
-    train_epoch_len = hparams.trainer.train_epoch_len
-    if isinstance(train_epoch_len, float):
-        total_train_batches = len(dm.train_dataloader())
-        train_epoch_len = max(1, math.ceil(total_train_batches * train_epoch_len))
 
     train_mode = cfg.trainer.get("train_mode", "train")
     trainer_mapping = {
@@ -69,35 +55,18 @@ def main(cfg) -> None:
 
     callbacks = [RichProgressBar(leave=True)]
     profiler = None
-    val_epoch_len = hparams.trainer.val_epoch_len
-    if isinstance(val_epoch_len, float):
-        total_val_batches = len(dm.val_dataloader())
-        val_epoch_len = max(1, math.ceil(total_val_batches * val_epoch_len))
-
-    check_val_every_n_epoch = hparams.trainer.check_val_every_n_epoch
-    val_check_interval = train_epoch_len * check_val_every_n_epoch
     trainer = Trainer(
         accelerator="gpu",
         max_epochs=hparams.trainer.num_epochs,
         logger=logger,
         callbacks=callbacks,
         enable_progress_bar=True,
-        limit_train_batches=train_epoch_len,
-        limit_val_batches=val_epoch_len,
-        val_check_interval=val_check_interval,
-        check_val_every_n_epoch=None,
-        limit_test_batches=hparams.trainer.get("test_epoch_len", 1.0),
-        log_every_n_steps=hparams.trainer.get("log_every_n_steps", 1),
+        limit_train_batches=hparams.trainer.train_epoch_len,
+        limit_val_batches=hparams.trainer.val_epoch_len,
+        check_val_every_n_epoch=hparams.trainer.check_val_every_n_epoch,
         profiler=profiler,
     )
-
     trainer.fit(diff_trainer, dm)
-
-    if bool(hparams.trainer.get("run_test_after_fit", False)):
-        if bool(hparams.trainer.get("test_with_best_checkpoint", True)):
-            load_best_checkpoint(diff_trainer)
-        dm.setup("test")
-        trainer.test(diff_trainer, datamodule=dm)
 
 
 if __name__ == "__main__":

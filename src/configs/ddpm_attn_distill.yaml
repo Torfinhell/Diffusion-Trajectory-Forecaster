@@ -1,25 +1,16 @@
 defaults:
-  - model: diffusion_attn_student 
+  - model: diffusion_attn_student
   - /model@teacher_model: diffusion_attn_teacher
   - dataloaders: overfit
-  - feat_extract: small_no_scenes
+  - dataset: small_no_scenes
   - logger: clearml
   - metrics: all_metrics
   - visual: default
   - diffusion_sampler: ddpm
   - _self_
 
-distill:
-  teacher_checkpoint: "checkpoints/best45/best.eqx"
-
-  lambdas:
-    gt: 1.0
-    scene: 0.1
-    sa: 0.1
-    ca: 0.1
-    out: 0.5
-
 trainer:
+  teacher_checkpoint: "checkpoints/best45/best.eqx"
   train_mode: "debug" #hardcoded
   num_epochs: 15
   train_epoch_len: 1.0
@@ -40,8 +31,19 @@ trainer:
   run_test_after_fit: false
   test_with_best_checkpoint: true
 
+dataset:
+  data:
+    s3_url: null
+    data_access: null
 
 loss:
+  _target_: src.losses.distillation_loss.KDLoss
+  lambdas:
+    gt: 1.0
+    scene: 0.1
+    sa: 0.1
+    ca: 0.1
+    out: 0.5
   accel_scale: 1.0
   yaw_rate_scale: 0.15
 

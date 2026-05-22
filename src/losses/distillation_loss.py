@@ -36,17 +36,13 @@ class KDProjectors(eqx.Module):
 
         sa_keys = jr.split(sa_key, len(student_dims["sa"]))
         self.sa_projs = [
-            None
-            if s == t
-            else eqx.nn.Linear(s, t, use_bias=False, key=k)
+            None if s == t else eqx.nn.Linear(s, t, use_bias=False, key=k)
             for (s, t, k) in zip(student_dims["sa"], teacher_dims["sa"], sa_keys)
         ]
 
         ca_keys = jr.split(ca_key, len(student_dims["ca"]))
         self.ca_projs = [
-            None
-            if s == t
-            else eqx.nn.Linear(s, t, use_bias=False, key=k)
+            None if s == t else eqx.nn.Linear(s, t, use_bias=False, key=k)
             for (s, t, k) in zip(student_dims["ca"], teacher_dims["ca"], ca_keys)
         ]
 
@@ -71,11 +67,11 @@ class KDProjectors(eqx.Module):
 class KDLoss(eqx.Module):
     """Knowledge-distillation loss with the same signature as MSELoss."""
 
-    teacher: list   # [DiffAttention]
+    teacher: list  # [DiffAttention]
     projectors: KDProjectors
     accel_scale: float
     yaw_rate_scale: float
-    lambdas: dict              # {"gt", "scene", "sa", "ca", "out"}
+    lambdas: dict  # {"gt", "scene", "sa", "ca", "out"}
 
     def __init__(
         self,
@@ -93,20 +89,17 @@ class KDLoss(eqx.Module):
 
     # Called once during __init__ of BaseTrainerDebug to build opt_state
     def get_trainable(self, student_model):
-        return eqx.filter(
-            (student_model, self.projectors), eqx.is_inexact_array
-        )
+        return eqx.filter((student_model, self.projectors), eqx.is_inexact_array)
 
     def __call__(
         self,
-        model,           # student DiffAttention
+        model,  # student DiffAttention
         diffusion_sampler,
         agent_past,
         agent_future,
         agents_coeffs,
         agent_future_valid,
         actions_future,
-        actions_future_valid,
         key,
         debug=False,
         **kwargs,
@@ -125,15 +118,17 @@ class KDLoss(eqx.Module):
         noisy_actions = diffusion_sampler.add_noise(gt_actions_norm, noise, timestep)
 
         teacher_out, teacher_feats = self.teacher[0].__call_with_features__(
-            timestep, noisy_actions, **kwargs)
+            timestep, noisy_actions, **kwargs
+        )
         teacher_out = jax.lax.stop_gradient(teacher_out)
         teacher_feats = jax.lax.stop_gradient(teacher_feats)
 
         # Student forward
         student_out, student_feats = model.__call_with_features__(
-            timestep, noisy_actions, **kwargs)
+            timestep, noisy_actions, **kwargs
+        )
 
-        #gt trajectory loss 
+        # gt trajectory loss
         pred_xy, _ = predictions_to_local_xy(
             student_out,
             agent_past=agent_past,
@@ -157,28 +152,24 @@ class KDLoss(eqx.Module):
         s_kv = self.projectors.project_kv_cond(student_feats["kv_cond"])
         l_scene = jnp.mean((s_kv - teacher_feats["kv_cond"]) ** 2)
 
-        # sa feature loss 
+        # sa feature loss
         t_sa = teacher_feats["sa_features"]
         s_sa = student_feats["sa_features"]
         if len(t_sa) > 0:
             sa_losses = [
-                jnp.mean(
-                    (self.projectors.project_sa(i, s_sa[i]) - t_sa[i]) ** 2
-                )
+                jnp.mean((self.projectors.project_sa(i, s_sa[i]) - t_sa[i]) ** 2)
                 for i in range(len(t_sa))
             ]
             l_sa = sum(sa_losses) / len(sa_losses)
         else:
             l_sa = jnp.zeros(())
 
-        # ca feature loss 
+        # ca feature loss
         t_ca = teacher_feats["ca_features"]
         s_ca = student_feats["ca_features"]
         if len(t_ca) > 0:
             ca_losses = [
-                jnp.mean(
-                    (self.projectors.project_ca(i, s_ca[i]) - t_ca[i]) ** 2
-                )
+                jnp.mean((self.projectors.project_ca(i, s_ca[i]) - t_ca[i]) ** 2)
                 for i in range(len(t_ca))
             ]
             l_ca = sum(ca_losses) / len(ca_losses)

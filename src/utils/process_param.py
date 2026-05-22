@@ -70,11 +70,14 @@ def _read_dvc_metadata(dvc_file: str | None) -> dict:
 
 def _dataset_metadata(cfg) -> dict:
     metadata = {}
-    for split, split_cfg in cfg.data.items():
+    for split, split_cfg in cfg.dataset.data.items():
+        if split not in ("train", "val", "test"):
+            continue  # skip allow_upload etc.
         dvc_file = split_cfg.get("dvc_file")
+        loc = split_cfg.get("path")
         split_info = {
-            "processed_path": split_cfg.processed_path,
-            "processed_path_abs": to_absolute_path(split_cfg.processed_path),
+            "path": loc,
+            "path_abs": to_absolute_path(loc) if loc else None,
             "dvc_file": dvc_file,
             "dvc": _read_dvc_metadata(dvc_file),
         }
@@ -147,7 +150,7 @@ def log_run_metadata(logger, cfg) -> None:
         return
 
     runtime_choices = dict(HydraConfig.get().runtime.choices)
-    dataset_name = runtime_choices.get("data")
+    dataset_name = runtime_choices.get("dataset")
     metadata = {
         "hydra_choices": runtime_choices,
         "git": _git_metadata(),

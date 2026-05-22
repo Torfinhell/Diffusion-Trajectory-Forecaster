@@ -11,7 +11,7 @@ def masked_abs_mean(values, weights):
     return (jnp.abs(values) * weights).sum() / jnp.maximum(weights.sum(), 1.0)
 
 
-class MSELoss(eqx.Module):
+class MseActionLoss(eqx.Module):
     accel_scale: float
     yaw_rate_scale: float
 

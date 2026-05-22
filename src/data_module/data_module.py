@@ -2,43 +2,29 @@ from collections.abc import Mapping
 
 import numpy as np
 import pytorch_lightning as L
+from flax.jax_utils import prefetch_to_device
 from hydra.utils import instantiate
 
-from src.data_module.wb_dataset import Dataset
+DATASET_SHARED_KEYS = ("allow_upload", "s3_url", "data_access", "dataset_root")
 
 
-def tree_collate(states):
-    sample = states[0]
+def instantiate_dataset_split(cfg_data, split: str):
+    shared = {k: cfg_data[k] for k in DATASET_SHARED_KEYS if k in cfg_data}
+    return instantiate(cfg_data[split], **shared)
 
-    if any(state is None for state in states):
-        return list(states)
 
-    if isinstance(sample, Mapping):
-        metadata_keys = {"__key__", "__url__", "__local_path__"}
-        collated = {}
-        for key in sample:
-            if key in metadata_keys:
-                continue
-            values = [state[key] for state in states]
-            if key == "scenario":
-                collated[key] = list(values)
-            else:
-                collated[key] = tree_collate(values)
-        return collated
+def collate_fn(states):
+    m_keys = {"__key__", "__url__", "__local_path__"}
+    return {
+        k: (
+            [s[k] for s in states]
+            if k == "scenario"
+            else np.stack([np.asarray(s[k]) for s in states], axis=0)
+        )
+        for k in states[0]
+        if k not in m_keys
+    }
 
-    if isinstance(sample, tuple):
-        return tuple(tree_collate([state[idx] for state in states]) for idx in range(len(sample)))
-
-    if isinstance(sample, list):
-        return [tree_collate([state[idx] for state in states]) for idx in range(len(sample))]
-
-    if sample is None:
-        return None
-
-    try:
-        return np.stack([np.asarray(state) for state in states], axis=0)
-    except Exception:
-        return list(states)
 
 class DiffusionTrackerDataModule(L.LightningDataModule):
     def __init__(self, cfg_data, cfg_dl, **kwargs):
@@ -50,16 +36,7 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         self.test_dataset = None
 
     def _dataset(self, split):
-        split_cfg = self.cfg_data[split]
-        return Dataset.build_webdataset(
-            split=split,
-            split_cfg=split_cfg,
-            is_train=(split == "train"),
-        )
-
-    @staticmethod
-    def _loader_cfg_dict(loader_cfg):
-        return {key: value for key, value in loader_cfg.items()}
+        return instantiate_dataset_split(self.cfg_data, split)
 
     def setup(self, stage):
         if stage in (None, "fit"):
@@ -75,32 +52,25 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         return batch
 
     def train_dataloader(self):
-        if self.train_dataset is None:
-            self.train_dataset = self._dataset("train")
-        loader_cfg = self._loader_cfg_dict(self.cfg_dl.train)
-        loader_cfg.pop("chunk_sampler", None)
-        loader_cfg.pop("shuffle", None)
-
-        return instantiate(
-            loader_cfg,
-            collate_fn=tree_collate,
+        dl = instantiate(
+            self.cfg_dl.train,
+            collate_fn=collate_fn,
             dataset=self.train_dataset,
         )
+        return prefetch_to_device(dl, size=2)
 
     def val_dataloader(self):
-        loader_cfg = self._loader_cfg_dict(self.cfg_dl.val)
-        loader_cfg.pop("shuffle", None)
-        return instantiate(
-            loader_cfg,
-            collate_fn=tree_collate,
+        dl = instantiate(
+            self.cfg_dl.val,
+            collate_fn=collate_fn,
             dataset=self.val_dataset,
         )
+        return prefetch_to_device(dl, size=2)
 
     def test_dataloader(self):
-        loader_cfg = self._loader_cfg_dict(self.cfg_dl.test)
-        loader_cfg.pop("shuffle", None)
-        return instantiate(
-            loader_cfg,
-            collate_fn=tree_collate,
+        dl = instantiate(
+            self.cfg_dl.test,
+            collate_fn=collate_fn,
             dataset=self.test_dataset,
         )
+        return prefetch_to_device(dl, size=2)

@@ -54,7 +54,7 @@ Notes:
 ### Dataset creation
 To build processed train/val/test datasets from raw Waymo data:
 ```bash
- uv run python -m scripts.create_dataset -cn=small_no_scenes
+ uv run python -m scripts.create_dataset
 ```
 
 ### DVC setup
@@ -93,25 +93,11 @@ Push updated artifacts:
 uv run dvc push
 ```
 
-### Train from S3-hosted WebDataset shards:
-```bash
-uv run python train.py \
-  feat_extract=small_no_scenes_s3
-```
-To use online training AWS cli is required:
-```bash
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip
-sudo ./aws/install
-```
-To provide credentials run
-``` bash
-aws configure
-```
-It asks next values:
-AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+### Dataset loading
+Training uses a unified `small_no_scenes` dataset config.
+- if the local dataset path exists, it is loaded directly
+- there is no separate local/create/stream dataset config anymore
 
-Remote WebDataset notes:
-- if `processed_path` starts with `s3://`, the dataset is treated as remote
-- during creation, shards are written to `local_cache_path`, uploaded to S3, and removed locally
-- during training, shards are streamed from S3 with `aws s3 cp`
+Notes:
+- training first checks the local `data.*.path` directories
+- dataset generation can also happen through training when the local dataset is missing and `creation_cfg` is set on the dataset config

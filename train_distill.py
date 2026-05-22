@@ -1,17 +1,18 @@
 import math
+
 import torch.multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 
 import equinox as eqx
-import jax.random as jr
 import hydra
+import jax.random as jr
 from hydra.utils import instantiate
 from pytorch_lightning.callbacks import RichProgressBar
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.losses.distillation_loss import KDLoss, KDProjectors
+from src.losses.distillation_loss import KDProjectors
 from src.trainers import BaseTrainerDebug
 from src.utils import (
     load_best_checkpoint,
@@ -21,17 +22,21 @@ from src.utils import (
 )
 
 
-@hydra.main(version_base=None, config_name="ddpm_attn_distill", config_path="src/configs")
+@hydra.main(
+    version_base=None, config_name="ddpm_attn_distill", config_path="src/configs"
+)
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=False)
 
     logger = None
     if hparams.get("logger", None) is not None:
-        logger = instantiate(hparams.logger) if getattr(hparams, "logger", None) else None
+        logger = (
+            instantiate(hparams.logger) if getattr(hparams, "logger", None) else None
+        )
     if logger is not None:
         log_run_metadata(logger, hparams)
 
-    dm = DiffusionTrackerDataModule(hparams.data, hparams.dataloaders)
+    dm = DiffusionTrackerDataModule(hparams.dataset.data, hparams.dataloaders)
     dm.setup("fit")
     if hparams.trainer.get("train_epoch_len", None) is not None:
         resolve_scheduler_decay_steps(hparams, dm)
@@ -51,7 +56,9 @@ def main(cfg) -> None:
 
     # Build and load teacher
     teacher = instantiate(hparams.teacher_model, key=teacher_key)
-    teacher_ckpt = cfg.distill.teacher_checkpoint
+    teacher_ckpt = hparams.trainer.get("teacher_checkpoint", None)
+    if teacher_ckpt is None:
+        raise ValueError("trainer.teacher_checkpoint must be set for distillation runs")
     teacher = eqx.tree_deserialise_leaves(teacher_ckpt, teacher)
     print(f"Loaded teacher from {teacher_ckpt}")
 
@@ -68,20 +75,16 @@ def main(cfg) -> None:
         key=proj_key,
     )
 
-    distill_loss = KDLoss(
-        teacher=teacher,
-        projectors=projectors,
-        lambdas=dict(hparams.distill.lambdas),
-        accel_scale=float(hparams.loss.accel_scale),
-        yaw_rate_scale=float(hparams.loss.yaw_rate_scale),
-    )
+    # Instantiate distillation loss via Hydra so it behaves like other losses.
+    # Provide runtime-only objects (teacher, projectors) as overrides.
+    distill_loss = instantiate(hparams.loss, teacher=teacher, projectors=projectors)
 
     diff_trainer = BaseTrainerDebug(
         seed=seed,
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
-        model=hparams.model,          
-        loss=distill_loss,             
+        model=hparams.model,
+        loss=distill_loss,
         optimizer=hparams.optimizer,
         scheduler=hparams.get("scheduler", None),
         diffusion_sampler=hparams.diffusion_sampler,

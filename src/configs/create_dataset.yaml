@@ -1,0 +1,7 @@
+defaults:
+  - dataset: small_no_scenes
+  - _self_
+
+dataset:
+  data:
+    allow_upload: true

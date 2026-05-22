@@ -1,7 +1,7 @@
 defaults:
   - model: diffusion_attn
   - dataloaders: overfit
-  - feat_extract: small_no_scenes
+  - dataset: small_no_scenes
   - logger: clearml
   - metrics: all_metrics
   - visual: default
@@ -28,10 +28,15 @@ trainer:
 
   run_test_after_fit: false
   test_with_best_checkpoint: true
+
+dataset:
+  data:
+    s3_url: null
+    data_access: null
+
 loss:
-  _target_: src.losses.MSELoss
-  accel_scale: 1.0
-  yaw_rate_scale: 0.15
+  _target_: src.losses.MseXYLoss
+  coord_scale: 1.0
 
 optimizer:
   _target_: optax.adam
