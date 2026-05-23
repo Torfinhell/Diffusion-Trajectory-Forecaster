@@ -217,30 +217,28 @@ class KDLoss(eqx.Module):
                 key,
                 **kwargs,
             )
-            if debug:
-                return total, stats
-            return total
+        else:
+            keys = jr.split(key, n)
 
-        keys = jr.split(key, n)
+            def one_draw(draw_key):
+                return self._loss_one_draw(
+                    model,
+                    diffusion_sampler,
+                    gt_actions,
+                    gt_actions_norm,
+                    agent_past,
+                    agent_future,
+                    agents_coeffs,
+                    agent_future_valid,
+                    draw_key,
+                    **kwargs,
+                )
 
-        def one_draw(draw_key):
-            return self._loss_one_draw(
-                model,
-                diffusion_sampler,
-                gt_actions,
-                gt_actions_norm,
-                agent_past,
-                agent_future,
-                agents_coeffs,
-                agent_future_valid,
-                draw_key,
-                **kwargs,
-            )
+            totals, stats = jax.vmap(one_draw)(keys)
+            total = jnp.mean(totals)
+            stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
 
-        totals, stats = jax.vmap(one_draw)(keys)
-        total = jnp.mean(totals)
-        stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
-
+        loss_dict = {"loss": total}
         if debug:
-            return total, stats
-        return total
+            loss_dict.update(stats)
+        return loss_dict

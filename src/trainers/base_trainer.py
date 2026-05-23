@@ -9,6 +9,11 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricFnCollection
+from src.utils import (
+    load_best_checkpoint,
+    log_model_artifact,
+    maybe_save_best_checkpoint,
+)
 from src.utils.data_utils import (
     batch_transform_trajs_to_global_frame,
     predictions_to_local_xy,
@@ -63,7 +68,7 @@ class BaseTrainer(L.LightningModule):
         self.metrics = cfg_metrics
         self.vis = vis_cfg
         self.trainer_cfg = trainer_cfg
-        trainer_cfg.pop("loss_returns_stats", None)
+        self.debug = bool(trainer_cfg.pop("debug", False))
         grad_clip = trainer_cfg.pop("grad_clip", None)
         self.grad_clip = None if grad_clip is None else float(grad_clip)
         if self.grad_clip is not None and self.grad_clip <= 0:
@@ -94,6 +99,21 @@ class BaseTrainer(L.LightningModule):
             else None
         )
         self.metrics_test = self.metrics_val
+
+    def on_validation_epoch_end(self):
+        if not self.debug or self.trainer.sanity_checking:
+            return
+        metrics = {}
+        for attr in ("callback_metrics", "logged_metrics", "progress_bar_metrics"):
+            metrics.update(getattr(self.trainer, attr, None) or {})
+        maybe_save_best_checkpoint(self, metrics)
+
+    def on_fit_end(self):
+        if not self.debug:
+            return
+        if bool(self.trainer_cfg.get("load_best_checkpoint", False)):
+            load_best_checkpoint(self)
+        log_model_artifact(self)
 
     def configure_optimizers(self):
         return []
@@ -183,7 +203,12 @@ class BaseTrainer(L.LightningModule):
 
     def _should_run_metrics(self, split: str) -> bool:
         metrics = self.metrics_train if split == "train" else self.metrics_val
-        return metrics is not None and len(metrics) > 0
+        if metrics is None or len(metrics) == 0:
+            return False
+        if not self.debug:
+            return True
+        every = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
+        return (self.current_epoch + 1) % every == 0
 
     def _step(self, batch, kind):
         is_train = kind == "train"
@@ -199,6 +224,7 @@ class BaseTrainer(L.LightningModule):
             batch=batch,
             key=step_key,
             train=is_train,
+            debug=self.debug,
             opt_state=self.opt_state if is_train else None,
             opt_update=self.optim.update if is_train else None,
         )
@@ -235,20 +261,30 @@ class BaseTrainer(L.LightningModule):
         batch,
         key,
         train,
+        debug=False,
         opt_state=None,
         opt_update=None,
     ):
         if train:
-            grad_fn = eqx.filter_value_and_grad(BaseTrainer.batch_loss_fn)
-            loss, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
+
+            def loss_with_aux(model, diffusion_sampler, loss_fn, batch, key, debug):
+                mean_dict = BaseTrainer.batch_loss_fn(
+                    model, diffusion_sampler, loss_fn, batch, key, debug
+                )
+                return mean_dict["loss"], mean_dict
+
+            grad_fn = eqx.filter_value_and_grad(loss_with_aux, has_aux=True)
+            (_, mean_dict), grads = grad_fn(
+                model, diffusion_sampler, loss_fn, batch, key, debug
+            )
             grad_norm = optax.global_norm(grads)
             updates, opt_state = opt_update(grads, opt_state)
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss = BaseTrainer.batch_loss_fn(
-                model, diffusion_sampler, loss_fn, batch, key
+            mean_dict = BaseTrainer.batch_loss_fn(
+                model, diffusion_sampler, loss_fn, batch, key, debug
             )
             grad_norm = None
             update_norm = None
@@ -258,7 +294,7 @@ class BaseTrainer(L.LightningModule):
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
-            "loss": loss,
+            **mean_dict,
         }
         if train:
             step_out["model"] = model
@@ -266,13 +302,13 @@ class BaseTrainer(L.LightningModule):
         return step_out
 
     @staticmethod
-    @eqx.filter_jit
     def batch_loss_fn(
         model,
         diffusion_sampler,
         loss_fn,
         batch,
         key,
+        debug=False,
     ):
         batch = {name: value for name, value in batch.items() if name != "scenario"}
         batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
@@ -283,12 +319,12 @@ class BaseTrainer(L.LightningModule):
                 model=model,
                 diffusion_sampler=diffusion_sampler,
                 key=single_key,
-                debug=False,
+                debug=debug,
                 **single_sample_dict,
             )
 
-        losses = jax.vmap(mapped_fn)(batch, loss_keys)
-        return jnp.mean(losses, axis=0)
+        loss_dicts = jax.vmap(mapped_fn)(batch, loss_keys)
+        return jax.tree.map(lambda x: jnp.mean(x, axis=0), loss_dicts)
 
     def sample_one_sol(
         self,
@@ -352,7 +388,6 @@ class BaseTrainer(L.LightningModule):
             return
 
         images = []
-        plot_kwargs = self._plot_vis_kwargs()
         num_samples = min(int(self.vis.get("num_samples", 0)), sampled_trajs.shape[0])
         for i in range(num_samples):
             scenario = batch["scenario"][i]
@@ -370,25 +405,11 @@ class BaseTrainer(L.LightningModule):
                 plot_simulator_state(
                     scenario,
                     pred_xy=pred_xy_world,
-                    **plot_kwargs,
+                    **self.vis,
                 )
             )
         if images:
             self._log_images(self._image_log_name(split, "predictions"), images)
-
-    def _plot_vis_kwargs(self):
-        excluded = {
-            "debug_metrics",
-            "debug_denoiser_scale",
-            "direct_prediction_eval",
-            "num_samples",
-            "num_trajectory_samples",
-            "sample_steps",
-            "sample_video_fps",
-            "enable_visualization",
-            "enable_train_visualization",
-        }
-        return {k: v for k, v in self.vis.items() if k not in excluded}
 
     @staticmethod
     def _image_log_name(split, name):

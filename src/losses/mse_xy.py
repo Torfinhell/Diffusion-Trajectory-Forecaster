@@ -51,11 +51,12 @@ class MseXYLoss(eqx.Module):
         loss_dict = {"loss": loss}
         if debug:
             valid_weights = jnp.asarray(agent_future_valid, dtype=gt_xy.dtype)
-            stats = {
-                "noisy_abs_mean": masked_abs_mean(y, valid_weights),
-                "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
-                "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
-                "valid_ratio": jnp.mean(valid_weights),
-            }
-            loss_dict.update(stats)
+            loss_dict.update(
+                {
+                    "noisy_abs_mean": masked_abs_mean(y, valid_weights),
+                    "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
+                    "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
+                    "valid_ratio": jnp.mean(valid_weights),
+                }
+            )
         return loss_dict

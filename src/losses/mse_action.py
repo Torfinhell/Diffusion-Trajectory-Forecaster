@@ -67,7 +67,7 @@ class MseActionLoss(eqx.Module):
         weights = jnp.broadcast_to(weights, err.shape)
         weighted_element_count = jnp.ones_like(err) * weights
         loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
-
+        loss_dict = {"loss": loss}
         if debug:
             xy_valid_weights = jnp.asarray(valid_target, dtype=gt_xy.dtype)
             action_valid_weights = jnp.asarray(
@@ -75,17 +75,20 @@ class MseActionLoss(eqx.Module):
             )
             if action_valid_weights.ndim == noisy_actions.ndim - 1:
                 action_valid_weights = action_valid_weights[..., None]
-            stats = {
-                "noisy_abs_mean": masked_abs_mean(noisy_actions, action_valid_weights),
-                "target_abs_mean": masked_abs_mean(gt_xy, xy_valid_weights),
-                "pred_abs_mean": masked_abs_mean(pred_xy, xy_valid_weights),
-                "target_action_abs_mean": masked_abs_mean(
-                    gt_actions, action_valid_weights
-                ),
-                "pred_action_abs_mean": masked_abs_mean(
-                    pred_actions, action_valid_weights
-                ),
-                "valid_ratio": jnp.mean(xy_valid_weights),
-            }
-            return loss, stats
-        return loss
+            loss_dict.update(
+                {
+                    "noisy_abs_mean": masked_abs_mean(
+                        noisy_actions, action_valid_weights
+                    ),
+                    "target_abs_mean": masked_abs_mean(gt_xy, xy_valid_weights),
+                    "pred_abs_mean": masked_abs_mean(pred_xy, xy_valid_weights),
+                    "target_action_abs_mean": masked_abs_mean(
+                        gt_actions, action_valid_weights
+                    ),
+                    "pred_action_abs_mean": masked_abs_mean(
+                        pred_actions, action_valid_weights
+                    ),
+                    "valid_ratio": jnp.mean(xy_valid_weights),
+                }
+            )
+        return loss_dict

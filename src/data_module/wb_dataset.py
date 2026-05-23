@@ -53,7 +53,6 @@ class WaymoWebDataset(IterableDataset):
         flush_every: int = 512,
         creation_cfg=None,
         allow_upload: bool = False,
-        dataset_root: str | None = None,
         s3_url: str | None = None,
         data_access: str | None = "local",
     ):
@@ -63,7 +62,7 @@ class WaymoWebDataset(IterableDataset):
         self.creation_cfg = creation_cfg
         self.allow_upload = bool(allow_upload)
         self.data_access = data_access or "local"
-        self.s3_root = s3_url or dataset_root
+        self.s3_root = s3_url
         self.local = Path(to_absolute_path(path))
         self.remote = S3Storage.for_split(self.s3_root, part) if self.s3_root else None
         self.meta = None

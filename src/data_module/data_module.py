@@ -8,11 +8,6 @@ from hydra.utils import instantiate
 DATASET_SHARED_KEYS = ("allow_upload", "s3_url", "data_access", "dataset_root")
 
 
-def instantiate_dataset_split(cfg_data, split: str):
-    shared = {k: cfg_data[k] for k in DATASET_SHARED_KEYS if k in cfg_data}
-    return instantiate(cfg_data[split], **shared)
-
-
 def collate_fn(states):
     m_keys = {"__key__", "__url__", "__local_path__"}
     return {
@@ -36,7 +31,10 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         self.test_dataset = None
 
     def _dataset(self, split):
-        return instantiate_dataset_split(self.cfg_data, split)
+        shared = {
+            k: self.cfg_data[k] for k in DATASET_SHARED_KEYS if k in self.cfg_data
+        }
+        return instantiate(self.cfg_data[split], **shared)
 
     def setup(self, stage):
         if stage in (None, "fit"):

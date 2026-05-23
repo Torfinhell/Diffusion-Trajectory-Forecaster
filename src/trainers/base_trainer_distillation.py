@@ -2,7 +2,6 @@ import equinox as eqx
 import optax
 
 from src.trainers.base_trainer import BaseTrainer
-from src.trainers.base_trainer_debug import BaseTrainerDebug
 from src.utils import (
     load_best_checkpoint,
     log_model_artifact,
@@ -12,9 +11,8 @@ from src.utils import (
 
 class BaseTrainerDistillation(BaseTrainer):
     def _init_trainer_state(self, cfg_metrics, vis_cfg, trainer_cfg):
-        trainer_cfg.pop("loss_returns_stats", None)
+        trainer_cfg.setdefault("debug", True)
         super()._init_trainer_state(cfg_metrics, vis_cfg, trainer_cfg)
-        self.loss_returns_stats = True
 
     def on_validation_epoch_end(self):
         if self.trainer.sanity_checking:
@@ -62,17 +60,19 @@ class BaseTrainerDistillation(BaseTrainer):
                 loss_fn_ = eqx.tree_at(
                     lambda loss: loss.projectors, loss_fn, projectors_
                 )
-                return BaseTrainerDebug.batch_loss_fn(
+                mean_dict = BaseTrainer.batch_loss_fn(
                     model_,
                     diffusion_sampler,
                     loss_fn_,
                     batch,
                     key,
+                    debug=True,
                 )
+                return mean_dict["loss"], mean_dict
 
             grad_fn = eqx.filter_value_and_grad(packed_loss_fn, has_aux=True)
             projectors = loss_fn.projectors
-            (loss, stats), (model_grads, proj_grads) = grad_fn((model, projectors))
+            (_, mean_dict), (model_grads, proj_grads) = grad_fn((model, projectors))
             packed_grads = (model_grads, proj_grads)
             grad_norm = optax.global_norm(packed_grads)
             packed_updates, opt_state = opt_update(packed_grads, opt_state)
@@ -82,12 +82,13 @@ class BaseTrainerDistillation(BaseTrainer):
             projectors = eqx.apply_updates(projectors, proj_updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss, stats = BaseTrainerDebug.batch_loss_fn(
+            mean_dict = BaseTrainer.batch_loss_fn(
                 model,
                 diffusion_sampler,
                 loss_fn,
                 batch,
                 key,
+                debug=True,
             )
             grad_norm = None
             update_norm = None
@@ -98,8 +99,7 @@ class BaseTrainerDistillation(BaseTrainer):
             "grad_norm": grad_norm,
             "update_norm": update_norm,
             "param_norm": param_norm,
-            "loss": loss,
-            **stats,
+            **mean_dict,
         }
         if train:
             step_out["model"] = model

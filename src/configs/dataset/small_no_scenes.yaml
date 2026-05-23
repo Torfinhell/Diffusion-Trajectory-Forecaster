@@ -5,7 +5,6 @@ data:
   allow_upload: false
   s3_url: null
   data_access: null
-  dataset_root: null
   train:
     _target_: src.data_module.wb_dataset.WaymoWebDataset
     part: train
