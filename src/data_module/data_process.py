@@ -446,6 +446,7 @@ def data_process_scenarios_batch(
     extract_map=True,
     extract_traffic=True,
     extract_relations=True,
+    extract_actions=True,
 ):
     return jax.vmap(
         lambda scenario: data_process_scenarios(
@@ -458,5 +459,6 @@ def data_process_scenarios_batch(
             extract_map=extract_map,
             extract_traffic=extract_traffic,
             extract_relations=extract_relations,
+            extract_actions=extract_actions,
         )
     )(scenarios)
