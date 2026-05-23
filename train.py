@@ -8,7 +8,12 @@ from pytorch_lightning.callbacks import RichProgressBar
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.trainers import BaseProfilerDebug, BaseTrainer, BaseTrainerDistillation
+from src.trainers import (
+    BaseProfilerDebug,
+    BaseTrainer,
+    BaseTrainerDebug,
+    BaseTrainerDistillation,
+)
 from src.utils import (
     build_training_modules,
     load_best_checkpoint,
@@ -46,9 +51,6 @@ def main(cfg) -> None:
             "expected one of train, debug, profiler, distillation"
         )
 
-    if train_mode == "debug":
-        module_trainer_cfg = {**module_trainer_cfg, "loss_returns_stats": True}
-
     modules = build_training_modules(hparams, train_mode)
     trainer_common = dict(
         cfg_metrics=hparams.metrics,
@@ -69,6 +71,8 @@ def main(cfg) -> None:
         )
     elif is_distillation:
         diff_trainer = BaseTrainerDistillation(**trainer_common)
+    elif train_mode == "debug":
+        diff_trainer = BaseTrainerDebug(**trainer_common)
     else:
         diff_trainer = BaseTrainer(**trainer_common)
 

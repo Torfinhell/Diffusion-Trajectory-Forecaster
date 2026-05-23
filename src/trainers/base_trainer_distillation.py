@@ -2,15 +2,39 @@ import equinox as eqx
 import optax
 
 from src.trainers.base_trainer import BaseTrainer
+from src.trainers.base_trainer_debug import BaseTrainerDebug
+from src.utils import (
+    load_best_checkpoint,
+    log_model_artifact,
+    maybe_save_best_checkpoint,
+)
 
 
 class BaseTrainerDistillation(BaseTrainer):
     def _init_trainer_state(self, cfg_metrics, vis_cfg, trainer_cfg):
-        super()._init_trainer_state(
-            cfg_metrics,
-            vis_cfg,
-            {**trainer_cfg, "loss_returns_stats": True},
-        )
+        trainer_cfg.pop("loss_returns_stats", None)
+        super()._init_trainer_state(cfg_metrics, vis_cfg, trainer_cfg)
+        self.loss_returns_stats = True
+
+    def on_validation_epoch_end(self):
+        if self.trainer.sanity_checking:
+            return
+        metrics = {}
+        for attr in ("callback_metrics", "logged_metrics", "progress_bar_metrics"):
+            metrics.update(getattr(self.trainer, attr, None) or {})
+        maybe_save_best_checkpoint(self, metrics)
+
+    def on_fit_end(self):
+        if bool(self.trainer_cfg.get("load_best_checkpoint", False)):
+            load_best_checkpoint(self)
+        log_model_artifact(self)
+
+    def _should_run_metrics(self, split: str) -> bool:
+        metrics = self.metrics_train if split == "train" else self.metrics_val
+        if metrics is None or len(metrics) == 0:
+            return False
+        every = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
+        return (self.current_epoch + 1) % every == 0
 
     def _apply_step_updates(self, step_out):
         if "projectors" in step_out:
@@ -30,7 +54,6 @@ class BaseTrainerDistillation(BaseTrainer):
         train,
         opt_state=None,
         opt_update=None,
-        return_loss_stats=False,
     ):
         if train:
 
@@ -39,13 +62,12 @@ class BaseTrainerDistillation(BaseTrainer):
                 loss_fn_ = eqx.tree_at(
                     lambda loss: loss.projectors, loss_fn, projectors_
                 )
-                return BaseTrainer.batch_loss_fn(
+                return BaseTrainerDebug.batch_loss_fn(
                     model_,
                     diffusion_sampler,
                     loss_fn_,
                     batch,
                     key,
-                    return_loss_stats=True,
                 )
 
             grad_fn = eqx.filter_value_and_grad(packed_loss_fn, has_aux=True)
@@ -60,13 +82,12 @@ class BaseTrainerDistillation(BaseTrainer):
             projectors = eqx.apply_updates(projectors, proj_updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
-            loss, stats = BaseTrainer.batch_loss_fn(
+            loss, stats = BaseTrainerDebug.batch_loss_fn(
                 model,
                 diffusion_sampler,
                 loss_fn,
                 batch,
                 key,
-                return_loss_stats=True,
             )
             grad_norm = None
             update_norm = None

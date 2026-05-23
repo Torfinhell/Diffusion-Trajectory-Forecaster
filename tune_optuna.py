@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.trainers import BaseTrainer
+from src.trainers import BaseTrainerDebug
 from src.utils import (
     build_training_modules,
     process_hparams,
@@ -110,10 +110,9 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
     val_check_interval = train_epoch_len * int(hparams.trainer.check_val_every_n_epoch)
 
     _, module_trainer_cfg = split_trainer_config(hparams.trainer)
-    module_trainer_cfg = {**module_trainer_cfg, "loss_returns_stats": True}
     train_mode = hparams.trainer.get("train_mode", "train")
     modules = build_training_modules(hparams, train_mode)
-    diff_model = BaseTrainer(
+    diff_model = BaseTrainerDebug(
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
         **modules,

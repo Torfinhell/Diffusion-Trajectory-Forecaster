@@ -9,11 +9,6 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.metrics import MetricFnCollection
-from src.utils import (
-    load_best_checkpoint,
-    log_model_artifact,
-    maybe_save_best_checkpoint,
-)
 from src.utils.data_utils import (
     batch_transform_trajs_to_global_frame,
     predictions_to_local_xy,
@@ -68,7 +63,7 @@ class BaseTrainer(L.LightningModule):
         self.metrics = cfg_metrics
         self.vis = vis_cfg
         self.trainer_cfg = trainer_cfg
-        self.loss_returns_stats = bool(trainer_cfg.pop("loss_returns_stats", False))
+        trainer_cfg.pop("loss_returns_stats", None)
         grad_clip = trainer_cfg.pop("grad_clip", None)
         self.grad_clip = None if grad_clip is None else float(grad_clip)
         if self.grad_clip is not None and self.grad_clip <= 0:
@@ -169,21 +164,6 @@ class BaseTrainer(L.LightningModule):
             self._log_validation_visualizations("val", batch, sampled_trajs)
         return loss
 
-    def on_validation_epoch_end(self):
-        if not self.loss_returns_stats or self.trainer.sanity_checking:
-            return
-        metrics = {}
-        for attr in ("callback_metrics", "logged_metrics", "progress_bar_metrics"):
-            metrics.update(getattr(self.trainer, attr, None) or {})
-        maybe_save_best_checkpoint(self, metrics)
-
-    def on_fit_end(self):
-        if not self.loss_returns_stats:
-            return
-        if bool(self.trainer_cfg.get("load_best_checkpoint", False)):
-            load_best_checkpoint(self)
-        log_model_artifact(self)
-
     def test_step(self, batch, batch_idx):
         self._step(batch, "test")
         if self.metrics_test is None or len(self.metrics_test) == 0:
@@ -203,12 +183,7 @@ class BaseTrainer(L.LightningModule):
 
     def _should_run_metrics(self, split: str) -> bool:
         metrics = self.metrics_train if split == "train" else self.metrics_val
-        if metrics is None or len(metrics) == 0:
-            return False
-        if not self.loss_returns_stats:
-            return True
-        every = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
-        return (self.current_epoch + 1) % every == 0
+        return metrics is not None and len(metrics) > 0
 
     def _step(self, batch, kind):
         is_train = kind == "train"
@@ -226,7 +201,6 @@ class BaseTrainer(L.LightningModule):
             train=is_train,
             opt_state=self.opt_state if is_train else None,
             opt_update=self.optim.update if is_train else None,
-            return_loss_stats=self.loss_returns_stats,
         )
 
         if is_train:
@@ -263,63 +237,19 @@ class BaseTrainer(L.LightningModule):
         train,
         opt_state=None,
         opt_update=None,
-        return_loss_stats=False,
     ):
         if train:
-            if return_loss_stats:
-                grad_fn = eqx.filter_value_and_grad(
-                    BaseTrainer.batch_loss_fn, has_aux=True
-                )
-                (loss, stats), grads = grad_fn(
-                    model,
-                    diffusion_sampler,
-                    loss_fn,
-                    batch,
-                    key,
-                    return_loss_stats=True,
-                )
-                grad_norm = optax.global_norm(grads)
-                updates, opt_state = opt_update(grads, opt_state)
-                update_norm = optax.global_norm(updates)
-                model = eqx.apply_updates(model, updates)
-            else:
-                grad_fn = eqx.filter_value_and_grad(BaseTrainer.batch_loss_fn)
-                loss, grads = grad_fn(
-                    model,
-                    diffusion_sampler,
-                    loss_fn,
-                    batch,
-                    key,
-                    return_loss_stats=False,
-                )
-                grad_norm = optax.global_norm(grads)
-                updates, opt_state = opt_update(grads, opt_state)
-                update_norm = optax.global_norm(updates)
-                model = eqx.apply_updates(model, updates)
-                stats = {}
+            grad_fn = eqx.filter_value_and_grad(BaseTrainer.batch_loss_fn)
+            loss, grads = grad_fn(model, diffusion_sampler, loss_fn, batch, key)
+            grad_norm = optax.global_norm(grads)
+            updates, opt_state = opt_update(grads, opt_state)
+            update_norm = optax.global_norm(updates)
+            model = eqx.apply_updates(model, updates)
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
-        elif return_loss_stats:
-            loss, stats = BaseTrainer.batch_loss_fn(
-                model,
-                diffusion_sampler,
-                loss_fn,
-                batch,
-                key,
-                return_loss_stats=True,
-            )
-            grad_norm = None
-            update_norm = None
-            param_norm = None
         else:
             loss = BaseTrainer.batch_loss_fn(
-                model,
-                diffusion_sampler,
-                loss_fn,
-                batch,
-                key,
-                return_loss_stats=False,
+                model, diffusion_sampler, loss_fn, batch, key
             )
-            stats = {}
             grad_norm = None
             update_norm = None
             param_norm = None
@@ -329,7 +259,6 @@ class BaseTrainer(L.LightningModule):
             "update_norm": update_norm,
             "param_norm": param_norm,
             "loss": loss,
-            **stats,
         }
         if train:
             step_out["model"] = model
@@ -344,32 +273,20 @@ class BaseTrainer(L.LightningModule):
         loss_fn,
         batch,
         key,
-        return_loss_stats=False,
     ):
         batch = {name: value for name, value in batch.items() if name != "scenario"}
         batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
         loss_keys = jr.split(key, batch_size)
 
         def mapped_fn(single_sample_dict, single_key):
-            out = loss_fn(
+            return loss_fn(
                 model=model,
                 diffusion_sampler=diffusion_sampler,
                 key=single_key,
-                debug=return_loss_stats,
+                debug=False,
                 **single_sample_dict,
             )
-            if not return_loss_stats:
-                return out
-            if isinstance(out, tuple):
-                return out
-            loss = out["loss"]
-            stats = {k: v for k, v in out.items() if k != "loss"}
-            return loss, stats
 
-        if return_loss_stats:
-            losses, stats = jax.vmap(mapped_fn)(batch, loss_keys)
-            mean_stats = jax.tree.map(lambda x: jnp.mean(x, axis=0), stats)
-            return jnp.mean(losses, axis=0), mean_stats
         losses = jax.vmap(mapped_fn)(batch, loss_keys)
         return jnp.mean(losses, axis=0)
 
