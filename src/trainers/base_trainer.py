@@ -26,33 +26,50 @@ class BaseTrainer(L.LightningModule):
 
     def __init__(
         self,
-        seed,
+        model,
+        loss_fn,
+        optim,
+        opt_state,
+        diffusion_sampler,
         cfg_metrics,
         vis_cfg,
-        model,
-        loss,
-        optimizer,
-        trainer_cfg=None,
-        scheduler=None,
-        diffusion_sampler=None,
-        grad_clip=None,
-        loss_returns_stats: bool = False,
-        teacher=None,
-        projectors=None,
+        key,
+        train_key,
+        loader_key,
+        sample_key,
         **kwargs,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["kwargs"])
-        del kwargs
-        self.automatic_optimization = False
-        self.key = jax.random.PRNGKey(seed)
-        self.key, key_model, self.train_key, self.loader_key, self.sample_key = (
-            jax.random.split(self.key, 5)
+        self.save_hyperparameters(
+            ignore=[
+                "model",
+                "loss_fn",
+                "optim",
+                "opt_state",
+                "key",
+                "train_key",
+                "loader_key",
+                "sample_key",
+            ]
         )
+        self.model = model
+        self.loss_fn = loss_fn
+        self.optim = optim
+        self.opt_state = opt_state
+        self.diffusion_sampler = diffusion_sampler
+        self.key = key
+        self.train_key = train_key
+        self.loader_key = loader_key
+        self.sample_key = sample_key
+        self._init_trainer_state(cfg_metrics, vis_cfg, kwargs)
+
+    def _init_trainer_state(self, cfg_metrics, vis_cfg, trainer_cfg):
+        self.automatic_optimization = False
         self.metrics = cfg_metrics
         self.vis = vis_cfg
-        self.trainer_cfg = trainer_cfg or {}
-        self.loss_returns_stats = bool(loss_returns_stats)
+        self.trainer_cfg = trainer_cfg
+        self.loss_returns_stats = bool(trainer_cfg.pop("loss_returns_stats", False))
+        grad_clip = trainer_cfg.pop("grad_clip", None)
         self.grad_clip = None if grad_clip is None else float(grad_clip)
         if self.grad_clip is not None and self.grad_clip <= 0:
             self.grad_clip = None
@@ -82,36 +99,9 @@ class BaseTrainer(L.LightningModule):
             else None
         )
         self.metrics_test = self.metrics_val
-        self.model = instantiate(model, key=key_model)
-        self.loss_fn = loss if isinstance(loss, eqx.Module) else instantiate(loss)
-        self.teacher = teacher
-        self.projectors = projectors
-        self.learning_rate_schedule = (
-            instantiate(scheduler) if scheduler is not None else None
-        )
-        self.diffusion_sampler = (
-            instantiate(diffusion_sampler) if diffusion_sampler is not None else None
-        )
-        optimizer_args = {}
-        if self.learning_rate_schedule is not None:
-            optimizer_args["learning_rate"] = self.learning_rate_schedule
-        optimizer_transform = instantiate(optimizer, **optimizer_args)
-        self.optim = self.clip_optimizer(optimizer_transform)
-        if self.projectors is not None:
-            trainable = eqx.filter((self.model, self.projectors), eqx.is_inexact_array)
-        else:
-            trainable = eqx.filter(self.model, eqx.is_inexact_array)
-        self.opt_state = self.optim.init(trainable)
 
     def configure_optimizers(self):
         return []
-
-    def clip_optimizer(self, optimizer):
-        transforms = []
-        if self.grad_clip is not None:
-            transforms.append(optax.clip_by_global_norm(self.grad_clip))
-        transforms.append(optimizer)
-        return optax.chain(*transforms)
 
     def _loss_scales(self):
         return (
@@ -237,15 +227,12 @@ class BaseTrainer(L.LightningModule):
             opt_state=self.opt_state if is_train else None,
             opt_update=self.optim.update if is_train else None,
             return_loss_stats=self.loss_returns_stats,
-            teacher=self.teacher,
-            projectors=self.projectors,
         )
 
         if is_train:
             self.model = step_out["model"]
             self.opt_state = step_out["opt_state"]
-            if "projectors" in step_out:
-                self.projectors = step_out["projectors"]
+            self._apply_step_updates(step_out)
 
         log_output = {
             f"{kind}/{key}": float(jnp.asarray(value))
@@ -263,6 +250,9 @@ class BaseTrainer(L.LightningModule):
             self.global_step_ += 1
         return step_out["loss"]
 
+    def _apply_step_updates(self, step_out):
+        pass
+
     @staticmethod
     def make_step(
         model,
@@ -274,44 +264,9 @@ class BaseTrainer(L.LightningModule):
         opt_state=None,
         opt_update=None,
         return_loss_stats=False,
-        teacher=None,
-        projectors=None,
     ):
         if train:
-            if projectors is not None:
-
-                def packed_loss_fn(params):
-                    model_, projectors_ = params
-                    return BaseTrainer.batch_loss_fn(
-                        model_,
-                        diffusion_sampler,
-                        loss_fn,
-                        batch,
-                        key,
-                        return_loss_stats=return_loss_stats,
-                        teacher=teacher,
-                        projectors=projectors_,
-                    )
-
-                grad_fn = eqx.filter_value_and_grad(
-                    packed_loss_fn, has_aux=return_loss_stats
-                )
-                if return_loss_stats:
-                    (loss, aux), (model_grads, proj_grads) = grad_fn(
-                        (model, projectors)
-                    )
-                    stats = aux if isinstance(aux, dict) else {}
-                else:
-                    loss, (model_grads, proj_grads) = grad_fn((model, projectors))
-                    stats = {}
-                packed_grads = (model_grads, proj_grads)
-                grad_norm = optax.global_norm(packed_grads)
-                packed_updates, opt_state = opt_update(packed_grads, opt_state)
-                model_updates, proj_updates = packed_updates
-                update_norm = optax.global_norm(packed_updates)
-                model = eqx.apply_updates(model, model_updates)
-                projectors = eqx.apply_updates(projectors, proj_updates)
-            elif return_loss_stats:
+            if return_loss_stats:
                 grad_fn = eqx.filter_value_and_grad(
                     BaseTrainer.batch_loss_fn, has_aux=True
                 )
@@ -322,8 +277,6 @@ class BaseTrainer(L.LightningModule):
                     batch,
                     key,
                     return_loss_stats=True,
-                    teacher=teacher,
-                    projectors=None,
                 )
                 grad_norm = optax.global_norm(grads)
                 updates, opt_state = opt_update(grads, opt_state)
@@ -338,8 +291,6 @@ class BaseTrainer(L.LightningModule):
                     batch,
                     key,
                     return_loss_stats=False,
-                    teacher=teacher,
-                    projectors=None,
                 )
                 grad_norm = optax.global_norm(grads)
                 updates, opt_state = opt_update(grads, opt_state)
@@ -355,8 +306,6 @@ class BaseTrainer(L.LightningModule):
                 batch,
                 key,
                 return_loss_stats=True,
-                teacher=teacher,
-                projectors=projectors,
             )
             grad_norm = None
             update_norm = None
@@ -369,8 +318,6 @@ class BaseTrainer(L.LightningModule):
                 batch,
                 key,
                 return_loss_stats=False,
-                teacher=teacher,
-                projectors=projectors,
             )
             stats = {}
             grad_norm = None
@@ -387,8 +334,6 @@ class BaseTrainer(L.LightningModule):
         if train:
             step_out["model"] = model
             step_out["opt_state"] = opt_state
-            if projectors is not None:
-                step_out["projectors"] = projectors
         return step_out
 
     @staticmethod
@@ -400,8 +345,6 @@ class BaseTrainer(L.LightningModule):
         batch,
         key,
         return_loss_stats=False,
-        teacher=None,
-        projectors=None,
     ):
         batch = {name: value for name, value in batch.items() if name != "scenario"}
         batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
@@ -412,8 +355,6 @@ class BaseTrainer(L.LightningModule):
                 model=model,
                 diffusion_sampler=diffusion_sampler,
                 key=single_key,
-                teacher=teacher,
-                projectors=projectors,
                 debug=return_loss_stats,
                 **single_sample_dict,
             )

@@ -9,17 +9,21 @@ from src.utils.process_param import (
     process_hparams,
     resolve_scheduler_decay_steps,
 )
-from src.utils.training import load_teacher, model_feature_dims, resolve_epoch_len
+from src.utils.training import (
+    build_training_modules,
+    resolve_epoch_len,
+    split_trainer_config,
+)
 
 __all__ = [
     "JaxProfilerCallback",
+    "build_training_modules",
     "load_best_checkpoint",
-    "load_teacher",
     "log_model_artifact",
     "log_run_metadata",
     "maybe_save_best_checkpoint",
-    "model_feature_dims",
     "process_hparams",
     "resolve_epoch_len",
     "resolve_scheduler_decay_steps",
+    "split_trainer_config",
 ]

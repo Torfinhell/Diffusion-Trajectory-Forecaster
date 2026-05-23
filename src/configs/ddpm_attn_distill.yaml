@@ -38,19 +38,16 @@ dataset:
 
 loss:
   _target_: src.losses.distillation_loss.KDLoss
-  distill_features:
-    - kv_cond
-    - sa
-    - ca
-    - out
   lambdas:
     gt: 1.0
-    scene: 0.1
+    kv_cond: 0.1
     sa: 0.1
     ca: 0.1
     out: 0.5
   accel_scale: 1.0
   yaw_rate_scale: 0.15
+  perturbation_per_sample: 4
+  perturbation_std: 0.05
 
 optimizer:
   _target_: optax.adam

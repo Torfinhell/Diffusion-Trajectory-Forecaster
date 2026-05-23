@@ -3,6 +3,7 @@ extract_map: ${dataset.data.train.creation_cfg.preprocessing.extract_map}
 extract_traffic: ${dataset.data.train.creation_cfg.preprocessing.extract_traffic}
 extract_relations: ${dataset.data.train.creation_cfg.preprocessing.extract_relations}
 se_args:
+  encoder: full
   rnn_type: "mhsa" # one of "lstm" "mhsa"
   rnn_num_heads: 2
   sa_num_heads: 2

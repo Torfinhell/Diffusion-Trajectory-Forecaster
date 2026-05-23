@@ -11,7 +11,13 @@ from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
 from src.trainers import BaseTrainer
-from src.utils import process_hparams, resolve_epoch_len, resolve_scheduler_decay_steps
+from src.utils import (
+    build_training_modules,
+    process_hparams,
+    resolve_epoch_len,
+    resolve_scheduler_decay_steps,
+    split_trainer_config,
+)
 
 
 def _round_to_multiple(value: int, multiple: int) -> int:
@@ -103,18 +109,15 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
     )
     val_check_interval = train_epoch_len * int(hparams.trainer.check_val_every_n_epoch)
 
+    _, module_trainer_cfg = split_trainer_config(hparams.trainer)
+    module_trainer_cfg = {**module_trainer_cfg, "loss_returns_stats": True}
+    train_mode = hparams.trainer.get("train_mode", "train")
+    modules = build_training_modules(hparams, train_mode)
     diff_model = BaseTrainer(
-        seed=hparams.trainer.seed,
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
-        model=hparams.model,
-        loss=hparams.loss,
-        optimizer=hparams.optimizer,
-        scheduler=hparams.scheduler,
-        diffusion_sampler=hparams.diffusion_sampler,
-        grad_clip=hparams.trainer.grad_clip,
-        trainer_cfg=hparams.trainer,
-        loss_returns_stats=True,
+        **modules,
+        **module_trainer_cfg,
     )
 
     trainer = Trainer(

@@ -1,2 +1,3 @@
 from .base_trainer import BaseTrainer
+from .base_trainer_distillation import BaseTrainerDistillation
 from .base_trainer_profiler import BaseProfilerDebug
