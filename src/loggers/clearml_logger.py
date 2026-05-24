@@ -8,8 +8,8 @@ from clearml import Task
 class ClearMLLogger(Logger):
     def __init__(
         self,
-        project,
-        task,
+        project_name,
+        task_name,
         access_key=None,
         secret_key=None,
         mode="online",
@@ -20,8 +20,8 @@ class ClearMLLogger(Logger):
 
         # 🔍 DEBUG PRINTS (This will show up right before the error hits)
         print("\n=== ClearML Debug Information ===")
-        print(f"Passed project arg: {project}")
-        print(f"Passed task arg: {task}")
+        print(f"Passed project arg: {project_name}")
+        print(f"Passed task arg: {task_name}")
         print(f"Passed access_key: {access_key}")
         # Print a masked version of the secret key for safety
         masked_secret = f"{secret_key[:6]}...{secret_key[-6:]}" if secret_key else None
@@ -40,7 +40,10 @@ class ClearMLLogger(Logger):
             )
 
         self._task = Task.init(
-            project_name=project, task_name=task, output_uri=output_uri, **kwargs
+            project_name=project_name,
+            task_name=task_name,
+            output_uri=output_uri,
+            **kwargs,
         )
         self._clearml_logger = self._task.get_logger()
         self._global_step = 0
