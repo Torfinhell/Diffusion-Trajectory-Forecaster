@@ -367,6 +367,7 @@ def calculate_relations(
         "extract_map",
         "extract_traffic",
         "extract_relations",
+        "extract_actions",
     ]
 )
 def data_process_scenarios(
@@ -434,6 +435,7 @@ def data_process_scenarios(
         "extract_map",
         "extract_traffic",
         "extract_relations",
+        "extract_actions",
     ]
 )
 def data_process_scenarios_batch(
