@@ -69,7 +69,14 @@ def data_process_traffic_light(scenarios, current_index=10):
     }
 
 
-@jax.jit(static_argnames=["current_index", "use_full_agent_info", "action_len"])
+@jax.jit(
+    static_argnames=[
+        "current_index",
+        "use_full_agent_info",
+        "action_len",
+        "extract_actions",
+    ]
+)
 def data_process_agent(
     scenarios,
     current_index=10,
