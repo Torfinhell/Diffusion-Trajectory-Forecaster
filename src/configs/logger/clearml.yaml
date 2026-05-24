@@ -2,3 +2,5 @@ _target_: src.loggers.ClearMLLogger
 project: "ddpm_baseline"
 task: "testing"
 output_uri: null
+access_key: "${oc.env:CLEARML_API_ACCESS_KEY}"
+secret_key: "${oc.env:CLEARML_API_SECRET_KEY}"

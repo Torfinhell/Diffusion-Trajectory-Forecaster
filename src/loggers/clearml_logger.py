@@ -1,14 +1,17 @@
 import numpy as np
-from clearml import Task
 from pytorch_lightning.loggers.logger import Logger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
+from clearml import Task
+
 
 class ClearMLLogger(Logger):
-    def __init__(self, project, task, mode="online", **kwargs):
+    def __init__(self, access_key=None, secret_key=None, mode="online", **kwargs):
         super().__init__()
         Task.set_offline(mode == "offline")
-        self._task = Task.init(project, task, **kwargs)
+        if access_key and secret_key:
+            Task.set_credentials(access_key=access_key, secret_key=secret_key)
+        self._task = Task.init(**kwargs)
         self._clearml_logger = self._task.get_logger()
         self._global_step = 0
 
