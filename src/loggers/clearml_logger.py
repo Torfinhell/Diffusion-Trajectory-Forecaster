@@ -10,7 +10,13 @@ class ClearMLLogger(Logger):
         super().__init__()
         Task.set_offline(mode == "offline")
         if access_key and secret_key:
-            Task.set_credentials(access_key=access_key, secret_key=secret_key)
+            Task.set_credentials(
+                key=access_key,
+                secret=secret_key,
+                api_host="https://api.clear.ml",
+                web_host="https://app.clear.ml",
+                files_host="https://files.clear.ml",
+            )
         self._task = Task.init(**kwargs)
         self._clearml_logger = self._task.get_logger()
         self._global_step = 0
