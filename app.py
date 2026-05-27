@@ -249,7 +249,7 @@ def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status
     _matplotlib_lock = threading.Lock()
 
     with gr.Blocks(title="Diffusion Trajectory Forecaster") as demo:
-        selected_idx = gr.State(value=0)
+        selected_idx = gr.Number(value=0, visible=False, precision=0)
         ckpt_note = f"  \n**Model:** {checkpoint_status}" if checkpoint_status else ""
         gr.Markdown(
             f"## Diffusion Trajectory Forecaster\n"
@@ -309,6 +309,7 @@ def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status
 
         # Event: user clicks Predict
         def on_predict(idx):
+            idx = int(idx)
             if idx in pred_cache:
                 return pred_cache[idx][0]
 
@@ -347,6 +348,7 @@ def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status
 
         # Event: user clicks Create GIF — runs in thread pool, parallel across users
         def on_create_gif(idx):
+            idx = int(idx)
             if idx not in pred_cache:
                 raise gr.Error("Run Predict first.")
             if pred_cache[idx][2] is not None:
