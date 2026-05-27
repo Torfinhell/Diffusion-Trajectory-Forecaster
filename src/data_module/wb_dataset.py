@@ -111,8 +111,8 @@ class WaymoWebDataset(IterableDataset):
             )
             for i in range(processed["agent_past"].shape[0]):
                 row = jax.tree_util.tree_map(lambda x, j=i: x[j], processed)
-                if c.extract_scene:
-                    row = {"scenario": pending[i] if i < 5 else None, **row}
+                if c.extract_scene or i < 5:
+                    row = {"scenario": pending[i], **row}
                 yield row
             pending = []
         if pending:
@@ -122,8 +122,8 @@ class WaymoWebDataset(IterableDataset):
             )
             for i in range(processed["agent_past"].shape[0]):
                 row = jax.tree_util.tree_map(lambda x, j=i: x[j], processed)
-                if c.extract_scene:
-                    row = {"scenario": pending[i] if i < 5 else None, **row}
+                if c.extract_scene or i < 5:
+                    row = {"scenario": pending[i], **row}
                 yield row
 
     def load_meta(self) -> dict:
