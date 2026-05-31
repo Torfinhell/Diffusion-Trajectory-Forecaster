@@ -1,5 +1,6 @@
 defaults:
   - dataset: small_no_scenes
+  - losses: xy_loss
   - _self_
 
 dataset:

@@ -1,7 +1,7 @@
 defaults:
   - model: diffusion_attn
-  - dataloaders: overfit
-  - dataset: small_no_scenes
+  - dataloaders: test_only
+  - dataset: inference
   - logger: clearml
   - metrics: all_metrics
   - visual: default
@@ -10,27 +10,18 @@ defaults:
   - _self_
 
 trainer:
-  train_mode: "train"
+  train_mode: "inference"
   action_len: ${losses.action_len}
   extract_actions: ${losses.extract_actions}
-  enable_profiler: false
-  limit_profile_batches: 3
-  debug: false
-  num_epochs: 10
-  train_epoch_len: 1.0
-  val_epoch_len: 1.0
-  log_validation: true
-  grad_clip: 5.0
-  seed: 1
-  check_val_every_n_epoch: 1
-  log_metrics_every_batch: 10
-  print_hparams: False
-  logging: "online"
-  best_checkpoint_metric: "val/loss"
-  best_checkpoint_mode: "min"
-  load_best_checkpoint: false
-  run_test_after_fit: false
+  num_epochs: 1
+  test_epoch_len: 1.0
   test_with_best_checkpoint: true
+  log_metrics_every_batch: 1
+  seed: 1
+  print_hparams: false
+  logging: "online"
+  grad_clip: 5.0
+  log_validation: false
 
 dataset:
   data:

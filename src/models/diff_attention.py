@@ -94,7 +94,7 @@ class DiffAttention(eqx.Module):
         _, a, _, _ = x_t.shape
         x_t_flat = x_t.reshape(a, -1)
         t_emb = self.noise_level_embedding(t_noise)
-        x_t = jax.vmap(self.input_proj)(x_t_flat)
+        x_t = jax.vmap(self.input_proj)(x_t_flat)  # TODO
         x_t = x_t + t_emb
 
         valid_agents = ~agents_mask

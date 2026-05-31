@@ -1,7 +1,6 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import jax.random as jr
 
 from src.models.components.batch import squeeze_batch
 

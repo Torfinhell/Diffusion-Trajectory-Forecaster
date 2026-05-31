@@ -5,41 +5,61 @@ from pytorch_lightning.callbacks import Callback
 
 
 class JaxProfilerCallback(Callback):
-    def __init__(self, log_dir: str, start_step: int, num_steps: int):
-        super().__init__()
+    """Profile the first `limit_profile_batches` train/val batches once, then upload traces."""
+
+    def __init__(self, log_dir: str, limit_profile_batches: int = 3):
         self.log_dir = Path(log_dir)
-        self.start_step = int(start_step)
-        self.stop_step = self.start_step + int(num_steps)
-        self._active = False
-        self._completed = False
-        self._seen_train_batches = 0
+        self.limit_profile_batches = int(limit_profile_batches)
+        self._train_done = False
+        self._val_done = False
+        self._active_stage = None
 
-    def on_fit_start(self, trainer, pl_module):
-        del trainer, pl_module
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        if self.stop_step <= self.start_step:
-            raise ValueError("JAX profiler num_steps must be a positive integer.")
-        self._seen_train_batches = 0
+    def _trace_dir(self, stage: str) -> Path:
+        return self.log_dir / stage
 
-    def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
-        del trainer, pl_module, batch, batch_idx
-        if self._completed or self._active:
+    def _start(self, stage: str):
+        trace_dir = self._trace_dir(stage)
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        jax.profiler.start_trace(str(trace_dir))
+        self._active_stage = stage
+
+    def _stop_and_upload(self, trainer, stage: str):
+        jax.profiler.stop_trace()
+        self._active_stage = None
+        logger = trainer.logger
+        trace_dir = self._trace_dir(stage)
+        if logger is not None and hasattr(logger, "upload_artifact"):
+            logger.upload_artifact(
+                name=f"jax_profiler_{stage}",
+                path=trace_dir,
+                metadata={
+                    "stage": stage,
+                    "limit_profile_batches": self.limit_profile_batches,
+                },
+            )
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        if self._train_done:
             return
-        if self._seen_train_batches >= self.start_step:
-            jax.profiler.start_trace(str(self.log_dir))
-            self._active = True
+        self._start("train")
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        del trainer, pl_module, outputs, batch, batch_idx
-        self._seen_train_batches += 1
-        if self._active and self._seen_train_batches >= self.stop_step:
-            jax.profiler.stop_trace()
-            self._active = False
-            self._completed = True
+        if self._train_done or self._active_stage != "train":
+            return
+        if batch_idx + 1 >= self.limit_profile_batches:
+            self._stop_and_upload(trainer, "train")
+            self._train_done = True
 
-    def on_fit_end(self, trainer, pl_module):
-        del trainer, pl_module
-        if self._active:
-            jax.profiler.stop_trace()
-            self._active = False
-            self._completed = True
+    def on_validation_epoch_start(self, trainer, pl_module):
+        if self._val_done:
+            return
+        self._start("val")
+
+    def on_validation_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    ):
+        if self._val_done or self._active_stage != "val":
+            return
+        if batch_idx + 1 >= self.limit_profile_batches:
+            self._stop_and_upload(trainer, "val")
+            self._val_done = True

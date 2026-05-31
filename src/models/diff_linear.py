@@ -26,14 +26,9 @@ class DiffLinear(eqx.Module):
         self.fc2 = eqx.nn.Linear(hid_dim, hid_dim, key=k2)
         self.fc_out = eqx.nn.Linear(hid_dim, traj_dim, key=k3)
 
-    def __call__(self, t_noise, x_t, **batch_kwargs):
-        cond = batch_kwargs.get("agent_past", batch_kwargs.get("cond", None))
-        if cond is None:
-            raise ValueError(
-                "DiffLinear expects `agent_past` (or `cond`) in batch kwargs."
-            )
+    def __call__(self, t_noise, x_t, actions_past, **batch_kwargs):
         x = jnp.concatenate(
-            [x_t.reshape(-1), cond.reshape(-1), jnp.atleast_1d(t_noise)], axis=0
+            [x_t.reshape(-1), actions_past.reshape(-1), jnp.atleast_1d(t_noise)], axis=0
         )
         x = jnn.relu(self.fc1(x))
         x = jnn.relu(self.fc2(x))

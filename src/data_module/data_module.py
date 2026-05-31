@@ -48,30 +48,36 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
         else:
             raise NotImplementedError("Didnt implement not fit stage")
 
-    def transfer_batch_to_device(self, batch, device, dataloader_idx):
+    def transfer_batch_to_device(self, batch, device, dataloader_idx):  # TODO
         del device, dataloader_idx
         return batch
 
     def train_dataloader(self):
-        dl = instantiate(
+        if self.cfg_dl.get("train", None) is None:
+            return None
+        return instantiate(
             self.cfg_dl.train,
             collate_fn=collate_fn,
             dataset=self.train_dataset,
         )
-        return prefetch_to_device(dl, size=2)
+        # return prefetch_to_device(dl, size=2)
 
     def val_dataloader(self):
-        dl = instantiate(
+        if self.cfg_dl.get("val", None) is None:
+            return None
+        return instantiate(
             self.cfg_dl.val,
             collate_fn=collate_fn,
             dataset=self.val_dataset,
         )
-        return prefetch_to_device(dl, size=2)
+        # return prefetch_to_device(dl, size=2)
 
     def test_dataloader(self):
-        dl = instantiate(
+        if self.cfg_dl.get("test", None) is None:
+            return None
+        return instantiate(
             self.cfg_dl.test,
             collate_fn=collate_fn,
             dataset=self.test_dataset,
         )
-        return prefetch_to_device(dl, size=2)
+        # return prefetch_to_device(dl, size=2)

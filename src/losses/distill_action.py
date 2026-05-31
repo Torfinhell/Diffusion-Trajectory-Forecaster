@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 
-from src.utils.data_utils import predictions_to_local_xy
+from src.data_module.agent_path import AgentPath
 
 
 def model_feature_dims(model_cfg: Any) -> dict[str, int | list[int]]:
@@ -90,8 +90,8 @@ class KDLoss(eqx.Module):
         diffusion_sampler,
         gt_actions,
         gt_actions_norm,
-        agent_past,
-        agent_future,
+        past_path: AgentPath,
+        future_path: AgentPath,
         agents_coeffs,
         agent_future_valid,
         key,
@@ -125,16 +125,12 @@ class KDLoss(eqx.Module):
             teacher_out = jax.lax.stop_gradient(teacher_out)
             teacher_feats = jax.lax.stop_gradient(teacher_feats)
 
-        pred_xy, _ = predictions_to_local_xy(
+        pred_xy = past_path.decode_action_sample(
             student_out,
-            agent_past=agent_past,
-            origin_vel=kwargs["origin_vel"],
-            agent_future=agent_future,
-            actions_future=gt_actions,
             accel_scale=self.accel_scale,
             yaw_rate_scale=self.yaw_rate_scale,
         )
-        gt_xy = jnp.asarray(agent_future[..., :2], dtype=jnp.float32)
+        gt_xy = future_path.future_xy_in_past_frame(past_path)
         err = (pred_xy - gt_xy) ** 2
         valid_target = agent_future_valid
         if valid_target.ndim == err.ndim - 1:
@@ -154,7 +150,6 @@ class KDLoss(eqx.Module):
         for feat_key, lam in self.lambdas.items():
             if feat_key == "gt" or lam == 0.0:
                 continue
-
             if feat_key == "out":
                 loss_term = jnp.mean((student_out - teacher_out) ** 2)
             elif feat_key == "kv_cond":
@@ -178,26 +173,26 @@ class KDLoss(eqx.Module):
                         for i in range(len(t_list))
                     ]
                     loss_term = sum(layer_losses) / len(layer_losses)
-
             stats[f"L_{feat_key}"] = loss_term
             total = total + lam * loss_term
-
         return total, stats
 
     def __call__(
         self,
         model,
         diffusion_sampler,
-        agent_past,
-        agent_future,
+        past_path: AgentPath,
+        future_path: AgentPath,
         agents_coeffs,
         agent_future_valid,
-        actions_future,
         key,
         debug=False,
         **kwargs,
     ):
-        gt_actions = jnp.asarray(actions_future, dtype=jnp.float32)
+        valid = agent_future_valid
+        if valid.ndim == future_path.path.ndim:
+            valid = valid[..., 0]
+        gt_actions, _ = future_path.actions(valid)
         action_scale = jnp.asarray(
             [self.accel_scale, self.yaw_rate_scale], dtype=gt_actions.dtype
         )
@@ -210,8 +205,8 @@ class KDLoss(eqx.Module):
                 diffusion_sampler,
                 gt_actions,
                 gt_actions_norm,
-                agent_past,
-                agent_future,
+                past_path,
+                future_path,
                 agents_coeffs,
                 agent_future_valid,
                 key,
@@ -226,8 +221,8 @@ class KDLoss(eqx.Module):
                     diffusion_sampler,
                     gt_actions,
                     gt_actions_norm,
-                    agent_past,
-                    agent_future,
+                    past_path,
+                    future_path,
                     agents_coeffs,
                     agent_future_valid,
                     draw_key,

@@ -1,6 +1,14 @@
+defaults:
+  - object_types: default
+  - _self_
+
 train:
   _target_: src.metrics.MetricFnCollection
   metrics: [ade, fde]
+  object_type_ids: ${object_types.ids}
+  object_type_labels: ${object_types.labels}
 val:
   _target_: src.metrics.MetricFnCollection
   metrics: [ade, fde]
+  object_type_ids: ${object_types.ids}
+  object_type_labels: ${object_types.labels}

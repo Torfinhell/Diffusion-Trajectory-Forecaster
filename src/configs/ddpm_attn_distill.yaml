@@ -7,9 +7,14 @@ defaults:
   - metrics: all_metrics
   - visual: default
   - diffusion_sampler: ddpm
+  - losses: distill_loss
   - _self_
 
 trainer:
+  action_len: ${losses.action_len}
+  extract_actions: ${losses.extract_actions}
+  enable_profiler: false
+  limit_profile_batches: 3
   teacher_checkpoint: "checkpoints/best45/best.eqx"
   train_mode: distillation
   debug: true
@@ -19,16 +24,13 @@ trainer:
   log_validation: true
   grad_clip: 5
   seed: 1
-  train_metric_every_n_epochs: 10
-  val_metric_every_n_epochs: 5
   check_val_every_n_epoch: 1
+  log_metrics_every_batch: 10
   print_hparams: False
   logging: "online"
-
   best_checkpoint_metric: "val/loss"
   best_checkpoint_mode: "min"
   load_best_checkpoint: false
-
   run_test_after_fit: false
   test_with_best_checkpoint: true
 
@@ -37,18 +39,7 @@ dataset:
     s3_url: null
     data_access: null
 
-loss:
-  _target_: src.losses.distillation_loss.KDLoss
-  lambdas:
-    gt: 1.0
-    kv_cond: 0.1
-    sa: 0.1
-    ca: 0.1
-    out: 0.5
-  accel_scale: 1.0
-  yaw_rate_scale: 0.15
-  perturbation_per_sample: 4
-  perturbation_std: 0.05
+loss: ${losses.loss}
 
 optimizer:
   _target_: optax.adam

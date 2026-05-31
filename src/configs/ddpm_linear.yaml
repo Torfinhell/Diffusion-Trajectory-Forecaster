@@ -1,14 +1,21 @@
 defaults:
   - model: diffusion_linear
   - dataloaders: basic
-  - dataset: default
+  - dataset: small_no_scenes
   - logger: clearml
-  - metrics: all_metrics #TODO Did we fix all metrics?
-  - visual: default #TODO Why default here?
+  - metrics: all_metrics
+  - visual: default
   - diffusion_sampler: ddpm
+  - losses: action_loss
   - _self_
+
 trainer:
-  train_mode: null
+  train_mode: "train"
+  action_len: ${losses.action_len}
+  extract_actions: ${losses.extract_actions}
+  enable_profiler: false
+  limit_profile_batches: 3
+  debug: false
   num_epochs: 20
   train_epoch_len: 1.0
   val_epoch_len: 1.0
@@ -16,17 +23,21 @@ trainer:
   grad_clip: 5.0
   seed: 1
   check_val_every_n_epoch: 1
+  log_metrics_every_batch: 10
   print_hparams: False
   logging: "offline"
+  best_checkpoint_metric: "val/loss"
+  best_checkpoint_mode: "min"
+  load_best_checkpoint: false
+  run_test_after_fit: false
+  test_with_best_checkpoint: true
 
 dataset:
   data:
     s3_url: null
     data_access: null
 
-loss:
-  _target_: src.losses.MseXYLoss
-  coord_scale: 1.0
+loss: ${losses.loss}
 
 optimizer:
   _target_: optax.adam

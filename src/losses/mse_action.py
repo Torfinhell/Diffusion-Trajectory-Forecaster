@@ -2,7 +2,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
 
-from src.utils.data_utils import predictions_to_local_xy
+from src.data_module.agent_path import AgentPath
 
 
 def masked_abs_mean(values, weights):
@@ -23,17 +23,18 @@ class MseActionLoss(eqx.Module):
         self,
         model,
         diffusion_sampler,
-        agent_past,
-        agent_future,
+        past_path: AgentPath,
+        future_path: AgentPath,
         agents_coeffs,
         agent_future_valid,
-        actions_future,
-        actions_future_valid,
         key,
         debug=False,
         **kwargs,
     ):
-        gt_actions = jnp.asarray(actions_future, dtype=jnp.float32)
+        valid = agent_future_valid
+        if valid.ndim == future_path.path.ndim:
+            valid = valid[..., 0]
+        gt_actions, actions_valid = future_path.actions(valid)
         action_scale = jnp.asarray(
             [self.accel_scale, self.yaw_rate_scale], dtype=gt_actions.dtype
         )
@@ -46,17 +47,13 @@ class MseActionLoss(eqx.Module):
         noise = jr.normal(noise_key, gt_actions.shape)
         noisy_actions = diffusion_sampler.add_noise(gt_actions_norm, noise, timestep)
         pred_actions_norm = model(timestep, noisy_actions, **kwargs)
-
-        pred_xy, pred_actions = predictions_to_local_xy(
+        pred_xy = past_path.decode_action_sample(
             pred_actions_norm,
-            agent_past=agent_past,
-            origin_vel=kwargs["origin_vel"],
-            agent_future=agent_future,
-            actions_future=actions_future,
             accel_scale=self.accel_scale,
             yaw_rate_scale=self.yaw_rate_scale,
         )
-        gt_xy = jnp.asarray(agent_future[..., :2], dtype=jnp.float32)
+        pred_actions = pred_actions_norm * action_scale
+        gt_xy = future_path.future_xy_in_past_frame(past_path)
 
         err = (pred_xy - gt_xy) ** 2
         valid_target = agent_future_valid
@@ -65,28 +62,25 @@ class MseActionLoss(eqx.Module):
         weights = jnp.asarray(agents_coeffs, dtype=err.dtype)[..., None, None]
         weights = weights * jnp.asarray(valid_target, dtype=err.dtype)
         weights = jnp.broadcast_to(weights, err.shape)
-        weighted_element_count = jnp.ones_like(err) * weights
-        loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
+        loss = (err * weights).sum() / jnp.maximum(
+            (jnp.ones_like(err) * weights).sum(), 1.0
+        )
         loss_dict = {"loss": loss}
         if debug:
             xy_valid_weights = jnp.asarray(valid_target, dtype=gt_xy.dtype)
-            action_valid_weights = jnp.asarray(
-                actions_future_valid, dtype=noisy_actions.dtype
-            )
-            if action_valid_weights.ndim == noisy_actions.ndim - 1:
-                action_valid_weights = action_valid_weights[..., None]
+            action_valid_weights = jnp.asarray(actions_valid, dtype=noisy_actions.dtype)
             loss_dict.update(
                 {
                     "noisy_abs_mean": masked_abs_mean(
-                        noisy_actions, action_valid_weights
+                        noisy_actions, action_valid_weights[..., None]
                     ),
                     "target_abs_mean": masked_abs_mean(gt_xy, xy_valid_weights),
                     "pred_abs_mean": masked_abs_mean(pred_xy, xy_valid_weights),
                     "target_action_abs_mean": masked_abs_mean(
-                        gt_actions, action_valid_weights
+                        gt_actions, action_valid_weights[..., None]
                     ),
                     "pred_action_abs_mean": masked_abs_mean(
-                        pred_actions, action_valid_weights
+                        pred_actions, action_valid_weights[..., None]
                     ),
                     "valid_ratio": jnp.mean(xy_valid_weights),
                 }

@@ -27,14 +27,7 @@ class BaseTrainerDistillation(BaseTrainer):
             load_best_checkpoint(self)
         log_model_artifact(self)
 
-    def _should_run_metrics(self, split: str) -> bool:
-        metrics = self.metrics_train if split == "train" else self.metrics_val
-        if metrics is None or len(metrics) == 0:
-            return False
-        every = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
-        return (self.current_epoch + 1) % every == 0
-
-    def _apply_step_updates(self, step_out):
+    def _apply_distill_proj_updates(self, step_out):
         if "projectors" in step_out:
             self.loss_fn = eqx.tree_at(
                 lambda loss: loss.projectors,
@@ -50,6 +43,9 @@ class BaseTrainerDistillation(BaseTrainer):
         batch,
         key,
         train,
+        extract_actions,
+        action_len,
+        debug=False,
         opt_state=None,
         opt_update=None,
     ):
@@ -66,7 +62,8 @@ class BaseTrainerDistillation(BaseTrainer):
                     loss_fn_,
                     batch,
                     key,
-                    debug=True,
+                    action_len,
+                    debug=debug,
                 )
                 return mean_dict["loss"], mean_dict
 
@@ -88,7 +85,8 @@ class BaseTrainerDistillation(BaseTrainer):
                 loss_fn,
                 batch,
                 key,
-                debug=True,
+                action_len,
+                debug=debug,
             )
             grad_norm = None
             update_norm = None

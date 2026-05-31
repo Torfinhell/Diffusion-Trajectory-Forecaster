@@ -1,190 +1,139 @@
-"""
-Gradio web app for Diffusion Trajectory Forecaster.
+"""Gradio web app for Diffusion Trajectory Forecaster."""
 
-HOW IT WORKS:
-- At startup we read N scenarios from the WebDataset into a plain Python list.
-- The user picks a scenario from a gallery 
-- Clicking "Predict" runs the diffusion model and overlays predicted trajectories.
-"""
-
-import sys
-import time
 import queue
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 
+import equinox as eqx
 import gradio as gr
+import hydra
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
-from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 
-sys.path.insert(0, str(Path(__file__).parent))
-from src.data_module.data_module import instantiate_dataset_split, collate_fn
+from src.data_module.agent_path import AgentPath
+from src.data_module.data_module import collate_fn, instantiate_dataset_split
 from src.trainers.base_trainer import BaseTrainer
-from src.utils.data_utils import (
-    batch_transform_trajs_to_global_frame,
-    predictions_to_local_xy,
-)
-from src.visualization.plotting import plot_state, create_prediction_gif
-
-import equinox as eqx
-import jax
+from src.visualization.plotting import create_prediction_gif, plot_state
 
 
-#use dataset with extract_scene:true and use_full_agent_info: true. (only val split is needed)
-DATASET_CONFIG = "small_no_scenes"
-CHECKPOINT_PATH = "checkpoints/best45/best.eqx"
-NUM_SCENARIOS = 40
-
-
-def load_cfg(dataset_config: str, model_config: str = "ddpm_attn"):
-    """Load Hydra config once, combining dataset and model configs."""
-    config_dir = str(Path(__file__).resolve().parent / "src" / "configs")
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(config_name=model_config, overrides=[f"dataset={dataset_config}"])
-    return cfg
-
-
-def load_scenarios(cfg, n: int) -> list[dict]:
-    """Read the first n samples from the val split into a list."""
-    ds = instantiate_dataset_split(cfg.dataset.data, "val")
+def load_scenarios(cfg, split: str, n: int) -> list[dict]:
+    ds = instantiate_dataset_split(cfg.dataset.data, split)
     scenarios = []
     for sample in ds:
         if len(scenarios) >= n:
             break
         scenarios.append(sample)
-    print(f"Loaded {len(scenarios)} scenarios")
+    print(f"Loaded {len(scenarios)} scenarios from {split}")
     return scenarios
 
 
-# Step 2: Build the model from a Hydra config + load checkpoint weights
 def load_model(cfg, checkpoint_path: str):
     model = instantiate(cfg.model, key=jr.PRNGKey(0))
-
     ckpt = Path(checkpoint_path)
     checkpoint_status = "random weights (no checkpoint)"
     if ckpt.exists():
         try:
             model = eqx.tree_deserialise_leaves(str(ckpt), model)
             checkpoint_status = f"loaded from {ckpt}"
-            print(f"Loaded checkpoint from {ckpt}")
-        except Exception as e:
-            checkpoint_status = f"load FAILED — using random weights ({type(e).__name__})"
-            print(f"WARNING: could not load checkpoint: {e}")
-    else:
-        print(f"WARNING: checkpoint not found at {ckpt}, using random weights")
-
+        except Exception as exc:
+            checkpoint_status = f"load FAILED — random weights ({type(exc).__name__})"
     diffusion_sampler = instantiate(cfg.diffusion_sampler)
     return model, diffusion_sampler, checkpoint_status
 
 
-
-# Step 3: Render a scenario image
-def render_scenario(sample: dict, pred_xy_world: np.ndarray | None = None) -> np.ndarray:
-    """
-    Render a top-down scene image.
-
-    Args:
-        sample: one item from our cached scenario list
-        pred_xy_world: optional (A, T, 2) predicted future xy in WORLD frame
-
-    Returns:
-        RGB image as numpy array (H, W, 3)
-    """
+def render_scenario(
+    sample: dict, pred_xy_world: np.ndarray | None = None
+) -> np.ndarray:
     scenario = sample.get("scenario")
-
-    if scenario is not None:
-        img = plot_state(
-            current_state=scenario,
-            log_traj=True,
-            traj_preds=pred_xy_world,   # (A, T, 2) or None
-            dx=75,
-            tick_off=True,
-            img_size=(400, 400),
-        )
-        return img
-    else:
-        print("WARNING: no scenario stored for this sample (extract_scene=false)")
+    if scenario is None:
         return None
+    return plot_state(
+        current_state=scenario,
+        log_traj=True,
+        traj_preds=pred_xy_world,
+        dx=75,
+        tick_off=True,
+        img_size=(400, 400),
+    )
 
 
-# Step 4: Run diffusion model inference on a batch of scenarios
-def run_inference_batch(model, diffusion_sampler, samples: list[dict]) -> list[np.ndarray]:
-    """
-    Run inference on a list of scenarios using BaseTrainer.sample_batch_sol.
-
-    Returns:
-        list of (A, T_future, 2) arrays, one per input scenario, LOCAL frame.
-    """
-
-    batch = collate_fn(samples) 
+def run_inference_batch(
+    model, diffusion_sampler, samples: list[dict], app_cfg
+) -> list[np.ndarray]:
+    batch = collate_fn(samples)
     keys_to_stack = [k for k in batch if k != "scenario"]
-
-    B = len(samples)
-    data_shape = batch["actions_future"].shape[1:]   # (A, K, 2)
+    action_len = int(app_cfg.action_len)
+    extract_actions = bool(app_cfg.extract_actions)
+    past0, future0 = BaseTrainer.build_paths(
+        jnp.asarray(batch["agent_past"][0]),
+        jnp.asarray(batch["agent_future"][0]),
+        action_len,
+    )
+    data_shape = past0.denoise_shape(extract_actions)
     key = jr.PRNGKey(int(time.time_ns() % (2**31)))
-    sample_keys = jr.split(key, B)
-
+    sample_keys = jr.split(key, len(samples))
     jax_batch = {k: jnp.asarray(batch[k]) for k in keys_to_stack}
 
-    sample_fn = lambda k, b: BaseTrainer.sample_one_sol(
-        None, model, diffusion_sampler, data_shape, b, key=k,
-    )
-    x_pred_batch = jax.vmap(sample_fn)(sample_keys, jax_batch)   # (B, A, K, 2)
-
-    results = []
-    for i, sample in enumerate(samples):
-        b = {k: jax_batch[k][i] for k in keys_to_stack}
-        pred_xy_local, _ = predictions_to_local_xy(
-            x_pred_batch[i],
-            agent_past=b["agent_past"],
-            origin_vel=b["origin_vel"],
-            agent_future=b["agent_future"],
-            actions_future=b["actions_future"],
-            accel_scale=1.0,
-            yaw_rate_scale=0.15,
+    def infer_one(sample_key, single_batch):
+        past_valid = jnp.any(single_batch["agent_past"][..., :2] != 0, axis=-1)
+        model_batch = {
+            k: v
+            for k, v in single_batch.items()
+            if k not in {"agent_past", "agent_future"}
+        }
+        past_path, future_path = BaseTrainer.build_paths(
+            single_batch["agent_past"],
+            single_batch["agent_future"],
+            action_len,
         )
-        results.append(np.asarray(pred_xy_local))
-    return results   # list of (A, T_future, 2)
+        model_batch["actions_past"] = past_path.actions_for_encoder(past_valid)
+        sampled = BaseTrainer.sample_one_sol(
+            model, diffusion_sampler, data_shape, model_batch, sample_key
+        )
+        if extract_actions:
+            return past_path.decode_action_sample(
+                sampled,
+                accel_scale=float(app_cfg.accel_scale),
+                yaw_rate_scale=float(app_cfg.yaw_rate_scale),
+            )
+        return future_path.decode_xy_sample(
+            sampled,
+            coord_scale=float(app_cfg.coord_scale),
+            past_path=past_path,
+        )
 
-
-# Step 5: Batching inference queue
-# Each Predict click submits a request  with a Future.
-# A background thread waits up to BATCH_TIMEOUT_MS for more requests, then runs
-# one batched forward pass and resolves all futures.
-BATCH_TIMEOUT_MS = 200
-MAX_BATCH_SIZE = 32
+    pred_xy = jax.vmap(infer_one)(sample_keys, jax_batch)
+    return [np.asarray(pred_xy[i]) for i in range(len(samples))]
 
 
 class InferenceQueue:
-    def __init__(self, model, diffusion_sampler, scenarios, pred_cache):
+    def __init__(self, model, diffusion_sampler, scenarios, pred_cache, app_cfg):
         self.model = model
         self.diffusion_sampler = diffusion_sampler
         self.scenarios = scenarios
         self.pred_cache = pred_cache
+        self.app_cfg = app_cfg
         self._q = queue.Queue()
-        t = threading.Thread(target=self._loop, daemon=True)
-        t.start()
+        threading.Thread(target=self._loop, daemon=True).start()
 
     def submit(self, indices: list[int]) -> Future:
-        """Submit a list of scenario indices. Returns a Future resolved with None."""
         fut = Future()
         self._q.put((indices, fut))
         return fut
 
     def _loop(self):
         while True:
-            # Block until the first request arrives.
             requests = [self._q.get()]
-            deadline = time.monotonic() + BATCH_TIMEOUT_MS / 1000
-
-            # Drain the queue until deadline or max batch size.
+            deadline = time.monotonic() + self.app_cfg.batch_timeout_ms / 1000
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -193,12 +142,12 @@ class InferenceQueue:
                     requests.append(self._q.get(timeout=remaining))
                 except queue.Empty:
                     break
-                # Unique indices across all requests so far.
-                total = len({i for idxs, _ in requests for i in idxs})
-                if total >= MAX_BATCH_SIZE:
+                if (
+                    len({i for idxs, _ in requests for i in idxs})
+                    >= self.app_cfg.max_batch_size
+                ):
                     break
 
-            # Collect unique uncached indices across all requests.
             all_indices = []
             seen = set()
             for idxs, _ in requests:
@@ -210,24 +159,29 @@ class InferenceQueue:
             if all_indices:
                 try:
                     samples = [self.scenarios[i] for i in all_indices]
-                    results = run_inference_batch(self.model, self.diffusion_sampler, samples)
+                    results = run_inference_batch(
+                        self.model, self.diffusion_sampler, samples, self.app_cfg
+                    )
                     for i, pred_xy_local in zip(all_indices, results):
                         s = self.scenarios[i]
                         if s.get("scenario") is not None:
-                            pred_xy_plot = np.asarray(batch_transform_trajs_to_global_frame(
-                                pred_xy_local,
-                                origin_xy=np.asarray(s["origin_xy"]),
-                                origin_theta=np.asarray(s["origin_theta"]),
-                            ))
+                            past_path = AgentPath(
+                                jnp.asarray(s["agent_past"]),
+                                int(self.app_cfg.action_len),
+                                ref_idx=-1,
+                            )
+                            pred_xy_plot = np.asarray(
+                                past_path.xy_to_global(jnp.asarray(pred_xy_local))
+                            )
                         else:
                             pred_xy_plot = pred_xy_local
                         img = render_scenario(s, pred_xy_world=pred_xy_plot)
                         existing_gif = self.pred_cache.get(i, (None, None, None))[2]
                         self.pred_cache[i] = (img, pred_xy_plot, existing_gif)
-                except Exception as e:
+                except Exception as exc:
                     for _, fut in requests:
                         if not fut.done():
-                            fut.set_exception(e)
+                            fut.set_exception(exc)
                     continue
 
             for _, fut in requests:
@@ -235,18 +189,20 @@ class InferenceQueue:
                     fut.set_result(None)
 
 
-
-# Step 6: Build the Gradio UI
-def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status: str = "") -> gr.Blocks:
+def build_app(
+    scenarios: list[dict],
+    model,
+    diffusion_sampler,
+    app_cfg,
+    checkpoint_status: str = "",
+):
     thumbnails = [render_scenario(s) for s in scenarios]
-
-    pred_cache: dict[int, tuple] = {}  # idx → (pred_img_arr, pred_xy, gif_path_or_None)
-    infer_queue = InferenceQueue(model, diffusion_sampler, scenarios, pred_cache)
-
-    # Thread pool for GIF rendering.
+    pred_cache: dict[int, tuple] = {}
+    infer_queue = InferenceQueue(
+        model, diffusion_sampler, scenarios, pred_cache, app_cfg
+    )
     gif_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gif")
-    # matplotlib's global figure manager is not thread-safe
-    _matplotlib_lock = threading.Lock()
+    matplotlib_lock = threading.Lock()
 
     with gr.Blocks(title="Diffusion Trajectory Forecaster") as demo:
         selected_idx = gr.Number(value=0, visible=False, precision=0)
@@ -257,7 +213,6 @@ def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status
         )
 
         with gr.Row():
-            # Left: gallery of scenario thumbnails
             with gr.Column(scale=1):
                 gallery = gr.Gallery(
                     value=thumbnails,
@@ -272,27 +227,14 @@ def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status
                     interactive=False,
                     show_label=False,
                 )
-
-            # Right: full scene view + prediction output
             with gr.Column(scale=2):
-                scene_img = gr.Image(
-                    value=thumbnails[0],
-                    label="Scene — log trajectory (past + ground truth)",
-                    height=400,
-                )
+                scene_img = gr.Image(value=thumbnails[0], label="Scene", height=400)
                 with gr.Row():
                     predict_btn = gr.Button("Predict", variant="primary")
                     gif_btn = gr.Button("Create GIF", variant="secondary")
-                pred_img = gr.Image(
-                    label="Prediction overlay",
-                    height=400,
-                )
-                gif_out = gr.Image(
-                    label="Animated prediction",
-                    height=400,
-                )
+                pred_img = gr.Image(label="Prediction overlay", height=400)
+                gif_out = gr.Image(label="Animated prediction", height=400)
 
-        # Event: user selects a scenario in the gallery
         def on_gallery_select(evt: gr.SelectData):
             idx = evt.index
             scene = render_scenario(scenarios[idx])
@@ -303,50 +245,45 @@ def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status
 
         gallery.select(
             fn=on_gallery_select,
-            inputs=None,
             outputs=[scene_img, selected_label, selected_idx, pred_img, gif_out],
         )
 
-        # Event: user clicks Predict
         def on_predict(idx):
             idx = int(idx)
             if idx in pred_cache:
                 return pred_cache[idx][0]
-
-            # Submit idx + neighbours to the shared inference queue.
             neighbour_indices = [
-                i for i in [idx - 1, idx, idx + 1]
-                if 0 <= i < len(scenarios)
+                i for i in (idx - 1, idx, idx + 1) if 0 <= i < len(scenarios)
             ]
             try:
-                fut = infer_queue.submit(neighbour_indices)
-                fut.result()   # blocks until the batch loop resolves this request
+                infer_queue.submit(neighbour_indices).result()
                 _enqueue_gif_prerender(idx)
                 return pred_cache[idx][0]
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                raise gr.Error(f"Inference failed: {e}")
-
-        predict_btn.click(
-            fn=on_predict,
-            inputs=[selected_idx],
-            outputs=[pred_img],
-        )
+            except Exception as exc:
+                raise gr.Error(f"Inference failed: {exc}") from exc
 
         def _render_gif(idx) -> str:
-            """Render a GIF for scenario idx and store in pred_cache"""
             entry = pred_cache[idx]
             if entry[2] is not None:
                 return entry[2]
             s = scenarios[idx]
             if s.get("scenario") is None:
                 raise RuntimeError("No road graph (extract_scene=true required).")
-            gif_path = create_prediction_gif(s, np.asarray(entry[1]), mpl_lock=_matplotlib_lock)
+            gif_path = create_prediction_gif(
+                s, np.asarray(entry[1]), mpl_lock=matplotlib_lock
+            )
             pred_cache[idx] = (entry[0], entry[1], gif_path)
             return gif_path
 
-        # Event: user clicks Create GIF — runs in thread pool, parallel across users
+        def _enqueue_gif_prerender(idx):
+            for i in (idx - 1, idx, idx + 1):
+                if (
+                    0 <= i < len(scenarios)
+                    and i in pred_cache
+                    and pred_cache[i][2] is None
+                ):
+                    gif_executor.submit(_render_gif, i)
+
         def on_create_gif(idx):
             idx = int(idx)
             if idx not in pred_cache:
@@ -355,45 +292,29 @@ def build_app(scenarios: list[dict], model, diffusion_sampler, checkpoint_status
                 return pred_cache[idx][2]
             try:
                 return gif_executor.submit(_render_gif, idx).result()
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                raise gr.Error(f"GIF creation failed: {e}")
+            except Exception as exc:
+                raise gr.Error(f"GIF creation failed: {exc}") from exc
 
-        def _enqueue_gif_prerender(idx):
-            """After a Predict, silently pre-render GIFs for neighbours in background."""
-            for i in [idx - 1, idx, idx + 1]:
-                if 0 <= i < len(scenarios) and i in pred_cache and pred_cache[i][2] is None:
-                    gif_executor.submit(_render_gif, i)  # fire and forget
-
-        gif_btn.click(
-            fn=on_create_gif,
-            inputs=[selected_idx],
-            outputs=[gif_out],
-        )
+        predict_btn.click(fn=on_predict, inputs=[selected_idx], outputs=[pred_img])
+        gif_btn.click(fn=on_create_gif, inputs=[selected_idx], outputs=[gif_out])
 
     return demo
 
 
-
-# Entry point
-if __name__ == "__main__":
-    cfg = load_cfg(DATASET_CONFIG)
-
-    print("Loading scenarios...")
-    scenarios = load_scenarios(cfg, NUM_SCENARIOS)
-
-    print("Loading model...")
-    model, diffusion_sampler, ckpt_status = load_model(cfg, CHECKPOINT_PATH)
-
-    print("Building app...")
-    demo = build_app(scenarios, model, diffusion_sampler, ckpt_status)
-
+@hydra.main(version_base=None, config_name="app", config_path="src/configs")
+def main(cfg) -> None:
+    app_cfg = cfg.app
+    scenarios = load_scenarios(cfg, app_cfg.dataset_split, int(app_cfg.num_scenarios))
+    model, diffusion_sampler, ckpt_status = load_model(cfg, app_cfg.checkpoint_path)
+    demo = build_app(scenarios, model, diffusion_sampler, app_cfg, ckpt_status)
     demo.queue()
-    # share=False = local only. Set share=True for a public gradio tunnel URL.
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=False,
+        server_name=app_cfg.server_name,
+        server_port=int(app_cfg.server_port),
+        share=bool(app_cfg.share),
         theme=gr.themes.Base(),
     )
+
+
+if __name__ == "__main__":
+    main()

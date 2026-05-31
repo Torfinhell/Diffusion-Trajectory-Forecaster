@@ -27,7 +27,6 @@ class LookupTimePosEmb(eqx.Module):
         return query_heads, key_heads, value_heads
 
     def after_temporal(self, x, time_len: int):
-        # eqx.nn.Embedding requires scalar indices
         return x + jax.vmap(self.embed)(jnp.arange(time_len))
 
 

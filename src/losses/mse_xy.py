@@ -2,6 +2,8 @@ import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
 
+from src.data_module.agent_path import AgentPath
+
 
 def masked_abs_mean(values, weights):
     values = jnp.asarray(values)
@@ -10,44 +12,39 @@ def masked_abs_mean(values, weights):
 
 
 class MseXYLoss(eqx.Module):
-    """Weighted MSE diffusion training loss."""
+    coord_scale: float
 
-    coord_scale: int
-
-    def __init__(self, coord_scale):
-        super().__init__()
+    def __init__(self, coord_scale: float = 1.0):
         self.coord_scale = coord_scale
 
     def __call__(
         self,
         model,
         diffusion_sampler,
-        agent_future,
+        past_path: AgentPath,
+        future_path: AgentPath,
         agents_coeffs,
         agent_future_valid,
         key,
         debug=False,
         **kwargs,
     ):
-        gt_xy = agent_future[..., :2] / self.coord_scale
+        gt_xy = future_path.local_xy() / self.coord_scale
         timestep_key, noise_key = jr.split(key)
         timestep = jr.randint(
             timestep_key, shape=(), minval=0, maxval=diffusion_sampler.num_steps
         )
         noise = jr.normal(noise_key, gt_xy.shape)
         y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
-        pred_xy = model(
-            timestep,
-            y,
-            **kwargs,
-        )
+        pred_xy = model(timestep, y, **kwargs)
         err = (pred_xy - gt_xy) ** 2
         weights = jnp.asarray(agents_coeffs, dtype=err.dtype)[
             ..., None, None
         ] * jnp.asarray(agent_future_valid, dtype=err.dtype)
         weights = jnp.broadcast_to(weights, err.shape)
-        weighted_element_count = jnp.ones_like(err) * weights
-        loss = (err * weights).sum() / jnp.maximum(weighted_element_count.sum(), 1.0)
+        loss = (err * weights).sum() / jnp.maximum(
+            (jnp.ones_like(err) * weights).sum(), 1.0
+        )
         loss_dict = {"loss": loss}
         if debug:
             valid_weights = jnp.asarray(agent_future_valid, dtype=gt_xy.dtype)

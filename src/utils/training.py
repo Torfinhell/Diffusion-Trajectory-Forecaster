@@ -7,7 +7,7 @@ import optax
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from src.losses.distillation_loss import model_feature_dims
+from src.losses.distill_action import model_feature_dims
 
 PL_TRAINER_KEYS = frozenset(
     {
@@ -18,8 +18,8 @@ PL_TRAINER_KEYS = frozenset(
         "check_val_every_n_epoch",
         "test_epoch_len",
         "log_every_n_steps",
-        "jax_profiler_start_step",
-        "jax_profiler_num_steps",
+        "enable_profiler",
+        "limit_profile_batches",
         "teacher_checkpoint",
         "print_hparams",
         "logging",
@@ -48,11 +48,67 @@ def clip_optimizer(optimizer, grad_clip: float | None):
     return optax.chain(*transforms)
 
 
+def _resolve_model_dims(hparams: Any) -> dict[str, int]:
+    """Resolve denoising and conditioning dimensions from config values."""
+    preprocess = hparams.dataset.feat_extract.preprocessing
+    current_index = int(preprocess.current_index)
+    action_len = int(hparams.trainer.action_len)
+    extract_actions = bool(hparams.trainer.extract_actions)
+
+    model_cfg = hparams.model
+    num_agents = int(
+        getattr(
+            getattr(model_cfg, "se_args", None),
+            "num_agents",
+            model_cfg.out_shape[0] if getattr(model_cfg, "out_shape", None) else 32,
+        )
+    )
+
+    # If sequence length is not explicitly configured, infer it from the current model horizon.
+    if extract_actions:
+        inferred_horizon = int(model_cfg.out_shape[1]) * action_len
+    else:
+        inferred_horizon = int(model_cfg.out_shape[1])
+    sequence_len = int(current_index + 1 + inferred_horizon)
+    future_steps = max(1, sequence_len - (current_index + 1))
+    denoise_steps = (
+        max(1, future_steps // action_len) if extract_actions else future_steps
+    )
+    past_action_steps = max(1, current_index // action_len)
+    return {
+        "num_agents": num_agents,
+        "denoise_steps": denoise_steps,
+        "past_action_steps": past_action_steps,
+    }
+
+
+def _configure_model_shapes(model_cfg, dims: dict[str, int]) -> None:
+    """Patch model config with runtime-resolved input/output dimensions."""
+    num_agents = int(dims["num_agents"])
+    denoise_steps = int(dims["denoise_steps"])
+    past_action_steps = int(dims["past_action_steps"])
+
+    if getattr(model_cfg, "_target_", "") == "src.models.DiffLinear":
+        model_cfg.input_shape = [num_agents, past_action_steps, 2]
+        model_cfg.output_shape = [num_agents, denoise_steps, 2]
+        return
+
+    if getattr(model_cfg, "_target_", "") == "src.models.DiffAttention":
+        model_cfg.out_shape = [num_agents, denoise_steps, 2]
+        model_cfg.final_out_dim = denoise_steps * 2
+        model_cfg.se_args.time_len = past_action_steps
+        model_cfg.se_args.num_feat = 2
+
+
 def build_training_modules(hparams: Any, train_mode: str) -> dict[str, Any]:
     """Instantiate model, loss, optimizer state, and PRNG keys from Hydra config."""
     trainer = hparams.trainer
     grad_clip = trainer.get("grad_clip")
     key = jr.PRNGKey(int(trainer.seed))
+    dims = _resolve_model_dims(hparams)
+    _configure_model_shapes(hparams.model, dims)
+    if train_mode == "distillation":
+        _configure_model_shapes(hparams.teacher_model, dims)
 
     if train_mode == "distillation":
         key, key_model, key_teacher, key_proj, train_key, loader_key, sample_key = (

@@ -88,7 +88,6 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
     cfg.trainer.train_epoch_len = tune_cfg.trainer.train_epoch_len
     cfg.trainer.val_epoch_len = tune_cfg.trainer.val_epoch_len
     cfg.trainer.enable_profiler = False
-    cfg.trainer.enable_jax_profiler = False
     cfg.trainer.logging = "disable"
     cfg.visual.enable_visualization = False
     cfg.visual.enable_train_visualization = False

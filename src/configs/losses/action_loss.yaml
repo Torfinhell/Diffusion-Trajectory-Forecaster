@@ -1,0 +1,7 @@
+extract_actions: true
+action_len: 5
+
+loss:
+  _target_: src.losses.MseActionLoss
+  accel_scale: 1.0
+  yaw_rate_scale: 0.15

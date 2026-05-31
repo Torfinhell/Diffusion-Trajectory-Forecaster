@@ -8,15 +8,12 @@ import optax
 import pytorch_lightning as L
 from hydra.utils import instantiate
 
-from src.metrics import MetricFnCollection
+from src.data_module.agent_path import AgentPath
+from src.losses import KDLoss, MseActionLoss, MseXYLoss
 from src.utils import (
     load_best_checkpoint,
     log_model_artifact,
     maybe_save_best_checkpoint,
-)
-from src.utils.data_utils import (
-    batch_transform_trajs_to_global_frame,
-    predictions_to_local_xy,
 )
 from src.visualization.viz import plot_simulator_state
 
@@ -37,6 +34,9 @@ class BaseTrainer(L.LightningModule):
         train_key,
         loader_key,
         sample_key,
+        extract_actions,
+        action_len,
+        log_metrics_every_batch=10,
         **kwargs,
     ):
         super().__init__()
@@ -61,6 +61,13 @@ class BaseTrainer(L.LightningModule):
         self.train_key = train_key
         self.loader_key = loader_key
         self.sample_key = sample_key
+        self.extract_actions = bool(extract_actions)
+        self.action_len = int(action_len)
+        self.log_metrics_every_batch = log_metrics_every_batch
+        if self.extract_actions:
+            assert isinstance(loss_fn, (MseActionLoss, KDLoss))
+        else:
+            assert isinstance(loss_fn, MseXYLoss)
         self._init_trainer_state(cfg_metrics, vis_cfg, kwargs)
 
     def _init_trainer_state(self, cfg_metrics, vis_cfg, trainer_cfg):
@@ -122,95 +129,38 @@ class BaseTrainer(L.LightningModule):
         return (
             getattr(self.loss_fn, "accel_scale", 1.0),
             getattr(self.loss_fn, "yaw_rate_scale", 0.15),
+            getattr(self.loss_fn, "coord_scale", 1.0),
         )
 
-    def _update_metrics_for_batch(self, metrics: MetricFnCollection, batch):
-        gt_xy_batch = batch["agent_future"][:, ..., :2]
-        batch_size = gt_xy_batch.shape[0]
-        sampled_pred_batch = self.sample_batch_sol(
-            self.model,
-            self.diffusion_sampler,
-            batch["actions_future"].shape[1:],
-            batch,
-            batch_size=batch_size,
+    @staticmethod
+    def build_paths(agent_past, agent_future, action_len):
+        past_path = AgentPath(agent_past, action_len, ref_idx=-1)
+        future_path = AgentPath(agent_future, action_len, ref_idx=0)
+        return past_path, future_path
+
+    def _decode_sample(self, sampled, past_path, future_path):
+        accel_scale, yaw_rate_scale, coord_scale = self._loss_scales()
+        if self.extract_actions:
+            return past_path.decode_action_sample(
+                sampled, accel_scale=accel_scale, yaw_rate_scale=yaw_rate_scale
+            )
+        return future_path.decode_xy_sample(
+            sampled, coord_scale=coord_scale, past_path=past_path
         )
-        accel_scale, yaw_rate_scale = self._loss_scales()
-        pred_xy_batch, _ = predictions_to_local_xy(
-            sampled_pred_batch,
-            agent_past=batch["agent_past"],
-            origin_vel=batch["origin_vel"],
-            agent_future=batch["agent_future"],
-            actions_future=batch["actions_future"],
-            accel_scale=accel_scale,
-            yaw_rate_scale=yaw_rate_scale,
-        )
-        batch["pred_xy"] = pred_xy_batch
-        batch["gt_xy"] = gt_xy_batch
-        batch["future_valid"] = batch["agent_future_valid"]
-        vals = metrics(**batch)
-        return sampled_pred_batch, vals
 
     def training_step(self, batch, batch_idx):
-        self._step(batch, "train")
-        if not self._should_run_metrics("train"):
-            return None
-        sampled_trajs, vals = self._update_metrics_for_batch(self.metrics_train, batch)
-        log_dict = {f"train/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
-        self.log_dict(
-            log_dict,
-            prog_bar=True,
-            on_step=False,
-            on_epoch=True,
-            batch_size=batch["agent_future"].shape[0],
-        )
-        if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
-            self._log_validation_visualizations("train", batch, sampled_trajs)
+        self._step(batch, "train", batch_idx)
         return None
 
     def validation_step(self, batch, batch_idx):
-        loss = self._step(batch, "val")
-        if not self._should_run_metrics("val"):
-            return loss
-        sampled_trajs, vals = self._update_metrics_for_batch(self.metrics_val, batch)
-        log_dict = {f"val/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
-        self.log_dict(
-            log_dict,
-            prog_bar=True,
-            on_step=False,
-            on_epoch=True,
-            batch_size=batch["agent_future"].shape[0],
-        )
-        if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
-            self._log_validation_visualizations("val", batch, sampled_trajs)
-        return loss
-
-    def test_step(self, batch, batch_idx):
-        self._step(batch, "test")
-        if self.metrics_test is None or len(self.metrics_test) == 0:
-            return None
-        sampled_trajs, vals = self._update_metrics_for_batch(self.metrics_test, batch)
-        log_dict = {f"test/{k}": float(jnp.asarray(v)) for k, v in vals.items()}
-        self.log_dict(
-            log_dict,
-            prog_bar=True,
-            on_step=False,
-            on_epoch=True,
-            batch_size=batch["agent_future"].shape[0],
-        )
-        if bool(self.trainer_cfg.get("log_validation", True)) and batch_idx == 0:
-            self._log_validation_visualizations("test", batch, sampled_trajs)
+        self._step(batch, "val", batch_idx)
         return None
 
-    def _should_run_metrics(self, split: str) -> bool:
-        metrics = self.metrics_train if split == "train" else self.metrics_val
-        if metrics is None or len(metrics) == 0:
-            return False
-        if not self.debug:
-            return True
-        every = max(1, int(self.trainer_cfg.get(f"{split}_metric_every_n_epochs", 1)))
-        return (self.current_epoch + 1) % every == 0
+    def test_step(self, batch, batch_idx):
+        self._step(batch, "test", batch_idx)
+        return None
 
-    def _step(self, batch, kind):
+    def _step(self, batch, kind, batch_idx=None):
         is_train = kind == "train"
         if is_train:
             step_key, self.train_key = jr.split(self.train_key)
@@ -225,6 +175,8 @@ class BaseTrainer(L.LightningModule):
             key=step_key,
             train=is_train,
             debug=self.debug,
+            extract_actions=self.extract_actions,
+            action_len=self.action_len,
             opt_state=self.opt_state if is_train else None,
             opt_update=self.optim.update if is_train else None,
         )
@@ -232,15 +184,15 @@ class BaseTrainer(L.LightningModule):
         if is_train:
             self.model = step_out["model"]
             self.opt_state = step_out["opt_state"]
-            self._apply_step_updates(step_out)
-
-        log_output = {
-            f"{kind}/{key}": float(jnp.asarray(value))
-            for key, value in step_out.items()
-            if key not in {"model", "opt_state", "projectors"} and value is not None
-        }
+            self._apply_distill_proj_updates(step_out)
         self.log_dict(
-            log_output,
+            {
+                f"{kind}/{key}": float(jnp.asarray(value))
+                for key, value in step_out.items()
+                if key
+                not in {"model", "opt_state", "projectors", "past_path", "future_path"}
+                and value is not None
+            },
             prog_bar=False,
             on_step=True,
             on_epoch=False,
@@ -248,9 +200,71 @@ class BaseTrainer(L.LightningModule):
         )
         if is_train:
             self.global_step_ += 1
+
+        metrics_cfg = {
+            "train": self.metrics_train,
+            "val": self.metrics_val,
+            "test": self.metrics_test,
+        }.get(kind)
+        if (
+            batch_idx is None
+            or metrics_cfg is None
+            or batch_idx % self.log_metrics_every_batch != 0
+        ):
+            return step_out["loss"]
+
+        batch_size = batch["agent_future"].shape[0]
+        past_path, future_path = self.build_paths(
+            batch["agent_past"][0], batch["agent_future"][0], self.action_len
+        )
+        data_shape = past_path.denoise_shape(self.extract_actions)
+        self.sample_key, key = jr.split(self.sample_key)
+        sample_keys = jr.split(key, batch_size)
+        sampled_pred_batch = self.sample_batch_sol(
+            self.model,
+            self.diffusion_sampler,
+            data_shape,
+            batch,
+            sample_keys,
+        )
+
+        def decode_one(sample, agent_past, agent_future):
+            past, future = BaseTrainer.build_paths(
+                agent_past, agent_future, self.action_len
+            )
+            return self._decode_sample(sample, past, future)
+
+        pred_xy_batch = jax.vmap(decode_one)(
+            sampled_pred_batch, batch["agent_past"], batch["agent_future"]
+        )
+
+        def gt_xy_one(agent_past, agent_future):
+            past, future = BaseTrainer.build_paths(
+                agent_past, agent_future, self.action_len
+            )
+            return future.future_xy_in_past_frame(past)
+
+        gt_xy_batch = jax.vmap(gt_xy_one)(batch["agent_past"], batch["agent_future"])
+        batch.update(
+            {
+                "pred_xy": pred_xy_batch,
+                "gt_xy": gt_xy_batch,
+                "future_valid": batch["agent_future_valid"],
+            }
+        )
+        vals = metrics_cfg(**batch)
+        self.log_dict(
+            {f"{kind}/{k}": float(jnp.asarray(v)) for k, v in vals.items()},
+            prog_bar=kind != "train",
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+        if kind == "val" and bool(self.trainer_cfg.get("log_validation", True)):
+            self._log_validation_visualizations("val", batch, pred_xy_batch)
         return step_out["loss"]
 
-    def _apply_step_updates(self, step_out):
+    def _apply_distill_proj_updates(self, step_out):
         pass
 
     @staticmethod
@@ -261,6 +275,8 @@ class BaseTrainer(L.LightningModule):
         batch,
         key,
         train,
+        extract_actions,
+        action_len,
         debug=False,
         opt_state=None,
         opt_update=None,
@@ -269,7 +285,13 @@ class BaseTrainer(L.LightningModule):
 
             def loss_with_aux(model, diffusion_sampler, loss_fn, batch, key, debug):
                 mean_dict = BaseTrainer.batch_loss_fn(
-                    model, diffusion_sampler, loss_fn, batch, key, debug
+                    model,
+                    diffusion_sampler,
+                    loss_fn,
+                    batch,
+                    key,
+                    action_len,
+                    debug,
                 )
                 return mean_dict["loss"], mean_dict
 
@@ -284,7 +306,7 @@ class BaseTrainer(L.LightningModule):
             param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
         else:
             mean_dict = BaseTrainer.batch_loss_fn(
-                model, diffusion_sampler, loss_fn, batch, key, debug
+                model, diffusion_sampler, loss_fn, batch, key, action_len, debug
             )
             grad_norm = None
             update_norm = None
@@ -308,36 +330,50 @@ class BaseTrainer(L.LightningModule):
         loss_fn,
         batch,
         key,
+        action_len,
         debug=False,
     ):
         batch = {name: value for name, value in batch.items() if name != "scenario"}
-        batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
-        loss_keys = jr.split(key, batch_size)
+        loss_keys = jr.split(key, jax.tree_util.tree_leaves(batch)[0].shape[0])
 
         def mapped_fn(single_sample_dict, single_key):
+            past_path, future_path = BaseTrainer.build_paths(
+                single_sample_dict["agent_past"],
+                single_sample_dict["agent_future"],
+                action_len,
+            )
+            past_valid = jnp.any(
+                single_sample_dict["agent_past"][..., :2] != 0, axis=-1
+            )
+            model_kwargs = {
+                k: v
+                for k, v in single_sample_dict.items()
+                if k not in {"agent_past", "agent_future"}
+            }
+            model_kwargs["actions_past"] = past_path.actions_for_encoder(past_valid)
             return loss_fn(
                 model=model,
                 diffusion_sampler=diffusion_sampler,
+                past_path=past_path,
+                future_path=future_path,
                 key=single_key,
                 debug=debug,
-                **single_sample_dict,
+                **model_kwargs,
             )
 
         loss_dicts = jax.vmap(mapped_fn)(batch, loss_keys)
         return jax.tree.map(lambda x: jnp.mean(x, axis=0), loss_dicts)
 
+    @staticmethod
+    @eqx.filter_jit
     def sample_one_sol(
-        self,
         model,
         diffusion_sampler,
         data_shape,
         batch,
+        key,
         save_full=False,
-        key=None,
     ):
-        if key is None:
-            self.sample_key, key = jr.split(self.sample_key)
-
         step_keys = jr.split(key, diffusion_sampler.num_steps + 1)
         x = jr.normal(step_keys[0], data_shape)
         timesteps = jnp.arange(diffusion_sampler.num_steps - 1, -1, -1, dtype=jnp.int32)
@@ -346,61 +382,47 @@ class BaseTrainer(L.LightningModule):
             timestep, step_key = inputs
             timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
             model_output = model(timestep_arr, x_t, **batch)
-            x_prev = diffusion_sampler.step(
-                step_key,
-                model_output,
-                timestep_arr,
-                x_t,
-            )
+            x_prev = diffusion_sampler.step(step_key, model_output, timestep_arr, x_t)
             return x_prev, x_prev
 
         x, path = jax.lax.scan(scan_step, x, (timesteps, step_keys[1:]))
-        if save_full:
-            return path
-        return x
+        return path if save_full else x
 
+    @staticmethod
+    @eqx.filter_jit
     def sample_batch_sol(
-        self,
-        model,
-        diffusion_sampler,
-        data_shape,
-        batch,
-        batch_size,
-        save_full=False,
+        model, diffusion_sampler, data_shape, batch, sample_keys, save_full=False
     ):
-        self.sample_key, key = jr.split(self.sample_key)
-        sample_keys = jr.split(key, batch_size)
-        sample_fn = lambda sample_key, batch: self.sample_one_sol(
+        safe_batch = {k: v for k, v in batch.items() if k != "scenario"}
+        sample_fn = lambda sample_key, single_batch: BaseTrainer.sample_one_sol(
             model,
             diffusion_sampler,
             data_shape,
-            batch,
+            single_batch,
+            sample_key,
             save_full=save_full,
-            key=sample_key,
         )
-        safe_vmap_batch = {k: v for k, v in batch.items() if k != "scenario"}
-        return jax.vmap(sample_fn)(sample_keys, safe_vmap_batch)
+        return jax.vmap(sample_fn)(sample_keys, safe_batch)
 
-    def _log_validation_visualizations(self, split, batch, sampled_trajs):
+    def _log_validation_visualizations(self, split, batch, pred_xy_batch):
         enable_visualization = bool(self.vis.get("enable_visualization", False))
         has_scenarios = "scenario" in batch and batch["scenario"] is not None
         if not enable_visualization or not has_scenarios:
             return
 
         images = []
-        num_samples = min(int(self.vis.get("num_samples", 0)), sampled_trajs.shape[0])
+        num_samples = min(int(self.vis.get("num_samples", 0)), pred_xy_batch.shape[0])
         for i in range(num_samples):
             scenario = batch["scenario"][i]
             if scenario is None:
                 continue
             pred_xy_plot = self._mask_pred_for_plot(
-                sampled_trajs[i], batch["agents_coeffs"][i]
+                pred_xy_batch[i], batch["agents_coeffs"][i]
             )
-            pred_xy_world = batch_transform_trajs_to_global_frame(
-                pred_xy_plot,
-                origin_xy=batch["origin_xy"][i],
-                origin_theta=batch["origin_theta"][i],
+            past_path, _ = self.build_paths(
+                batch["agent_past"][i], batch["agent_future"][i], self.action_len
             )
+            pred_xy_world = past_path.xy_to_global(pred_xy_plot)
             images.append(
                 plot_simulator_state(
                     scenario,
