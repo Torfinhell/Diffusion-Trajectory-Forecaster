@@ -1,6 +1,6 @@
 outs:
-- md5: 6efcd884b70d8988d845ffbfbe29dde8.dir
-  size: 540088794
+- md5: 65bcd95493e08ec03a56d46be30456f6.dir
+  size: 689848794
   nfiles: 6
   hash: md5
   path: small_no_scenes
