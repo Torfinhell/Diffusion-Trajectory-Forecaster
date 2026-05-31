@@ -46,12 +46,11 @@ def data_process_traffic_light(scenarios, current_index=10):
     }
 
 
-@jax.jit(static_argnames=["current_index", "use_full_agent_info", "action_len"])
+@jax.jit(static_argnames=["current_index", "use_full_agent_info"])
 def data_process_agent(
     scenarios,
     current_index=10,
     use_full_agent_info=True,
-    action_len=5,
 ):
     traj = scenarios.log_trajectory
 

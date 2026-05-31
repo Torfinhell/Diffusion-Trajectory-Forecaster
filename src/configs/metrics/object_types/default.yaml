@@ -1,6 +1,0 @@
-# Waymax ObjectTypeIds to report per-type ADE/FDE (0=unknown, 1=vehicle, 2=pedestrian, 3=cyclist)
-ids: [1, 2, 3]
-labels:
-  1: vehicle
-  2: pedestrian
-  3: cyclist

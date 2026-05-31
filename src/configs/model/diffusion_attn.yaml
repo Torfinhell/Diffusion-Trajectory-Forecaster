@@ -33,5 +33,5 @@ camlp_args:
   out_dim: 160
   kv_dim: 40
 num_camlp: 4
-out_shape: [32, 16, 2]
+out_shape: [32, 80, 2]
 final_out_dim: 32

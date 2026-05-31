@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
-from src.data_module.agent_path import AgentPath
-from src.utils.path_kinematics import roll_out
+from src.data_module import AgentPath
+from src.utils import roll_out
 
 
 def test_local_global_roundtrip_xy():

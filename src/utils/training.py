@@ -60,20 +60,16 @@ def _resolve_model_dims(hparams: Any) -> dict[str, int]:
         getattr(
             getattr(model_cfg, "se_args", None),
             "num_agents",
-            model_cfg.out_shape[0] if getattr(model_cfg, "out_shape", None) else 32,
+            (
+                model_cfg.output_shape[0]
+                if getattr(model_cfg, "output_shape", None)
+                else 32
+            ),
         )
     )
-
-    # If sequence length is not explicitly configured, infer it from the current model horizon.
-    if extract_actions:
-        inferred_horizon = int(model_cfg.out_shape[1]) * action_len
-    else:
-        inferred_horizon = int(model_cfg.out_shape[1])
-    sequence_len = int(current_index + 1 + inferred_horizon)
-    future_steps = max(1, sequence_len - (current_index + 1))
-    denoise_steps = (
-        max(1, future_steps // action_len) if extract_actions else future_steps
-    )
+    model_dim = model_cfg.output_shape[-2]
+    assert model_dim + current_index + 1 == 90
+    denoise_steps = max(1, model_dim // action_len) if extract_actions else model_dim
     past_action_steps = max(1, current_index // action_len)
     return {
         "num_agents": num_agents,
@@ -94,7 +90,7 @@ def _configure_model_shapes(model_cfg, dims: dict[str, int]) -> None:
         return
 
     if getattr(model_cfg, "_target_", "") == "src.models.DiffAttention":
-        model_cfg.out_shape = [num_agents, denoise_steps, 2]
+        model_cfg.output_shape = [num_agents, denoise_steps, 2]
         model_cfg.final_out_dim = denoise_steps * 2
         model_cfg.se_args.time_len = past_action_steps
         model_cfg.se_args.num_feat = 2

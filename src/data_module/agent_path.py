@@ -8,8 +8,6 @@ import jax.numpy as jnp
 from src.utils.path_kinematics import inverse_kinematics, roll_out
 from src.utils.trajectory_transform import wrap_angle
 
-PATH_FEATURE_DIM = 5
-
 
 class AgentPath(eqx.Module):
     """Path tensor with trailing shape (A, T, 5): [x, y, yaw, vel_x, vel_y]."""
@@ -32,14 +30,9 @@ class AgentPath(eqx.Module):
         dt: float = 0.1,
     ):
         path = jnp.asarray(path)
-        if path.ndim != 3 or path.shape[-1] != PATH_FEATURE_DIM:
-            raise ValueError(
-                f"AgentPath expects (A, T, {PATH_FEATURE_DIM}), got {path.shape}"
-            )
+        assert path.ndim == 3, "path should have ndim=3"
         num_agents, num_timesteps, _ = path.shape
-        if num_timesteps > 1 and (num_timesteps - 1) % action_len != 0:
-            raise ValueError("num_timesteps - 1 must be divisible by action_len")
-        num_actions = 0 if num_timesteps <= 1 else (num_timesteps - 1) // action_len
+        num_actions = 0 if num_timesteps <= 1 else num_timesteps // action_len
 
         self.path = path
         self.action_len = int(action_len)

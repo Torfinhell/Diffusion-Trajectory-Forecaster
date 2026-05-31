@@ -19,7 +19,7 @@ import jax.random as jr
 import numpy as np
 from hydra.utils import instantiate
 
-from src.data_module.agent_path import AgentPath
+from src.data_module import AgentPath
 from src.data_module.data_module import collate_fn, instantiate_dataset_split
 from src.trainers.base_trainer import BaseTrainer
 from src.visualization.plotting import create_prediction_gif, plot_state
