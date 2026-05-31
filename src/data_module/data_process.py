@@ -304,7 +304,6 @@ def data_process_scenarios(
         scenarios,
         current_index=current_index,
         use_full_agent_info=use_full_agent_info,
-        action_len=action_len,
     )
     map_info = {}
     if extract_map:
