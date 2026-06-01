@@ -18,6 +18,7 @@ class DiffAttention(eqx.Module):
     noise_level_embedding: eqx.nn.Embedding
     input_proj: eqx.nn.Sequential
     mlp_out: eqx.nn.Linear
+    diagonal_ca: bool
 
     def __init__(
         self,
@@ -33,10 +34,14 @@ class DiffAttention(eqx.Module):
         extract_map: bool = True,
         extract_traffic: bool = True,
         extract_relations: bool = True,
+        diagonal_ca: bool | None = None,
     ):
         se_key, ca_mlp_key, sa_mlp_key, out_key, future_key, past_key, proj_key = (
             jr.split(key, 7)
         )
+        se_args = dict(se_args)
+        combiner_type = se_args.pop("combiner_type", "context_combiner")
+        combiner_args = se_args.pop("combiner_args", None)
         self.encoder = SceneEncoder(
             agent_encoder_args=se_args,
             map_embed_dim=se_args["out_dim"],
@@ -45,6 +50,8 @@ class DiffAttention(eqx.Module):
             extract_map=extract_map,
             extract_traffic=extract_traffic,
             extract_relations=extract_relations,
+            combiner_type=combiner_type,
+            combiner_args=combiner_args,
             key=se_key,
         )
         sa_keys = jr.split(sa_mlp_key, num_sa_mlp)
@@ -77,6 +84,7 @@ class DiffAttention(eqx.Module):
             ]
         )
         self.out_shape = tuple(out_shape)
+        self.diagonal_ca = diagonal_ca if diagonal_ca is not None else (combiner_type != "transformer")
 
     def _forward_impl(self, t_noise, x_t, *, collect_features: bool, **batch_kwargs):
         if x_t.ndim == 3:
@@ -100,7 +108,10 @@ class DiffAttention(eqx.Module):
         valid_agents = ~agents_mask
         valid_context = ~context_mask
         self_attn_mask = valid_agents[:, None] & valid_agents[None, :]
-        cross_attn_mask = jnp.diag(valid_agents) & valid_context[None, :]
+        if self.diagonal_ca:
+            cross_attn_mask = jnp.diag(valid_agents) & valid_context[None, :]
+        else:
+            cross_attn_mask = valid_agents[:, None] & valid_context[None, :]
 
         x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
         sa = [] if collect_features else None
