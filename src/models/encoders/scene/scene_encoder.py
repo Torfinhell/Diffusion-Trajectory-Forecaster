@@ -6,8 +6,14 @@ import jax.random as jr
 from src.models.components.context_combiner import ContextCombiner
 from src.models.components.map import MapEncoder
 from src.models.components.relations import RelationEncoder
+from src.models.components.transformer_combiner import TransformerContextCombiner
 from src.models.components.traffic_light import TrafficLightEncoder
 from src.models.encoders.agent import build_agent_encoder
+
+_COMBINERS = {
+    "context_combiner": ContextCombiner,
+    "transformer": TransformerContextCombiner,
+}
 
 
 class SceneEncoder(eqx.Module):
@@ -16,7 +22,7 @@ class SceneEncoder(eqx.Module):
     map_encoder: MapEncoder | None
     traffic_light_encoder: TrafficLightEncoder | None
     relation_encoder: RelationEncoder | None
-    context_combiner: ContextCombiner
+    context_combiner: eqx.Module
 
     def __init__(
         self,
@@ -30,6 +36,8 @@ class SceneEncoder(eqx.Module):
         extract_map: bool = True,
         extract_traffic: bool = True,
         extract_relations: bool = True,
+        combiner_type: str = "context_combiner",
+        combiner_args: dict | None = None,
         key=None,
         **kwargs,
     ):
@@ -49,29 +57,16 @@ class SceneEncoder(eqx.Module):
         )
 
         map_embed_dim = context_dim if map_embed_dim is None else int(map_embed_dim)
-        traffic_light_embed_dim = (
-            context_dim
-            if traffic_light_embed_dim is None
-            else int(traffic_light_embed_dim)
-        )
+        traffic_light_embed_dim = context_dim if traffic_light_embed_dim is None else int(traffic_light_embed_dim)
         rel_embed_dim = context_dim if rel_embed_dim is None else int(rel_embed_dim)
 
-        self.map_encoder = (
-            MapEncoder(map_embed_dim, map_hidden_dim, key=map_key)
-            if extract_map
-            else None
-        )
-        self.traffic_light_encoder = (
-            TrafficLightEncoder(traffic_light_embed_dim, key=traffic_key)
-            if extract_traffic
-            else None
-        )
-        self.relation_encoder = (
-            RelationEncoder(hidden_dim=rel_embed_dim, key=rel_key)
-            if extract_relations
-            else None
-        )
-        self.context_combiner = ContextCombiner(
+        self.map_encoder = MapEncoder(map_embed_dim, map_hidden_dim, key=map_key) if extract_map else None
+        self.traffic_light_encoder = TrafficLightEncoder(traffic_light_embed_dim, key=traffic_key) if extract_traffic else None
+        self.relation_encoder = RelationEncoder(hidden_dim=rel_embed_dim, key=rel_key) if extract_relations else None
+
+        combiner_cls = _COMBINERS.get(combiner_type, ContextCombiner)
+        extra = dict(combiner_args or {})
+        self.context_combiner = combiner_cls(
             agent_dim=context_dim,
             out_dim=context_dim,
             hidden_dim=context_hidden_dim,
@@ -79,6 +74,7 @@ class SceneEncoder(eqx.Module):
             map_dim=map_embed_dim if extract_map else 0,
             tl_dim=traffic_light_embed_dim if extract_traffic else 0,
             rel_dim=rel_embed_dim if extract_relations else 0,
+            **extra,
         )
 
     def __call__(
@@ -105,8 +101,7 @@ class SceneEncoder(eqx.Module):
         )
         encoded_tl = (
             self.traffic_light_encoder(traffic_light_points)
-            if self.traffic_light_encoder is not None
-            and traffic_light_points is not None
+            if self.traffic_light_encoder is not None and traffic_light_points is not None
             else None
         )
 
@@ -125,40 +120,39 @@ class SceneEncoder(eqx.Module):
         scene_map = None
         if encoded_map_lanes is not None:
             valid_lanes = (~maps_mask).astype(jnp.float32)
-            scene_map = (encoded_map_lanes * valid_lanes[:, None]).sum(0) / jnp.maximum(
-                valid_lanes.sum(), 1.0
-            )
+            scene_map = (encoded_map_lanes * valid_lanes[:, None]).sum(0) / jnp.maximum(valid_lanes.sum(), 1.0)
 
         scene_tl = None
         if encoded_tl is not None:
             valid_tl = (~traffic_lights_mask).astype(jnp.float32)
-            scene_tl = (encoded_tl * valid_tl[:, None]).sum(0) / jnp.maximum(
-                valid_tl.sum(), 1.0
-            )
+            scene_tl = (encoded_tl * valid_tl[:, None]).sum(0) / jnp.maximum(valid_tl.sum(), 1.0)
 
         scene_rel = None
         if self.relation_encoder is not None and relations is not None:
             if relations.ndim == 4:
                 relations = relations[0]
             a = encoded_agents.shape[0]
-            agent_relations = relations[:a, :a, :]
             self_loop = jnp.eye(a, dtype=bool)
             pair_mask = agents_valid[:, None] & agents_valid[None, :] & ~self_loop
-            scene_rel = self.relation_encoder(agent_relations, pair_mask)
+            scene_rel = self.relation_encoder(relations[:a, :a], pair_mask)
 
-        encodings = self.context_combiner(
+        result = self.context_combiner(
             encoded_agents,
             agents_mask,
             scene_map=scene_map,
             scene_tl=scene_tl,
             scene_rel=scene_rel,
         )
+        if isinstance(result, tuple):
+            encodings, context_mask = result
+        else:
+            encodings, context_mask = result, agents_mask
 
         outputs = {
             "agents_mask": agents_mask,
             "maps_mask": maps_mask,
             "traffic_lights_mask": traffic_lights_mask,
-            "context_mask": agents_mask,
+            "context_mask": context_mask,
             "encodings": encodings,
         }
         if agents_types is not None:
