@@ -88,14 +88,14 @@ def run_inference_batch(
         model_batch = {
             k: v
             for k, v in single_batch.items()
-            if k not in {"agent_past", "agent_future"}
+            if k not in {"agent_future", "agent_past"}
         }
         past_path, future_path = BaseTrainer.build_paths(
             single_batch["agent_past"],
             single_batch["agent_future"],
             action_len,
         )
-        model_batch["actions_past"] = past_path.actions_for_encoder(past_valid)
+        model_batch["past_path"] = past_path
         sampled = BaseTrainer.sample_one_sol(
             model, diffusion_sampler, data_shape, model_batch, sample_key
         )

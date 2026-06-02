@@ -342,15 +342,15 @@ class BaseTrainer(L.LightningModule):
                 single_sample_dict["agent_future"],
                 action_len,
             )
-            past_valid = jnp.any(
-                single_sample_dict["agent_past"][..., :2] != 0, axis=-1
-            )
+            # TODO
+            # past_valid = jnp.any(
+            #     single_sample_dict["agent_past"][..., :2] != 0, axis=-1
+            # )
             model_kwargs = {
                 k: v
                 for k, v in single_sample_dict.items()
-                if k not in {"agent_past", "agent_future"}
+                if k not in {"agent_future", "agent_past"}
             }
-            model_kwargs["actions_past"] = past_path.actions_for_encoder(past_valid)
             return loss_fn(
                 model=model,
                 diffusion_sampler=diffusion_sampler,

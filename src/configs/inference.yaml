@@ -31,7 +31,8 @@ dataset:
 loss: ${losses.loss}
 
 optimizer:
-  _target_: optax.adam
+  _target_: optax.adamw
+  weight_decay: 0.0001
 
 scheduler:
   _target_: optax.cosine_decay_schedule

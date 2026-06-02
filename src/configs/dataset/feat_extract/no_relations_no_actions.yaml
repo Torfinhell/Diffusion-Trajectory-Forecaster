@@ -1,5 +1,5 @@
 preprocessing:
-  current_index: 9
+  current_index: 10
   use_full_agent_info: false
   action_len: ${losses.action_len}
   extract_map: true

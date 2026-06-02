@@ -46,7 +46,9 @@ class MseActionLoss(eqx.Module):
         )
         noise = jr.normal(noise_key, gt_actions.shape)
         noisy_actions = diffusion_sampler.add_noise(gt_actions_norm, noise, timestep)
-        pred_actions_norm = model(timestep, noisy_actions, **kwargs)
+        pred_actions_norm = model(
+            timestep, noisy_actions, **kwargs, past_path=past_path
+        )
         pred_xy = past_path.decode_action_sample(
             pred_actions_norm,
             accel_scale=self.accel_scale,

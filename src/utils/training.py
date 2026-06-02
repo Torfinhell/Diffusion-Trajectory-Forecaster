@@ -67,14 +67,12 @@ def _resolve_model_dims(hparams: Any) -> dict[str, int]:
             ),
         )
     )
-    model_dim = model_cfg.output_shape[-2]
-    assert model_dim + current_index + 1 == 90
+    model_dim = 91 - current_index - 1
     denoise_steps = max(1, model_dim // action_len) if extract_actions else model_dim
-    past_action_steps = max(1, current_index // action_len)
     return {
         "num_agents": num_agents,
         "denoise_steps": denoise_steps,
-        "past_action_steps": past_action_steps,
+        "past_agent_steps": current_index + 1,
     }
 
 
@@ -82,18 +80,21 @@ def _configure_model_shapes(model_cfg, dims: dict[str, int]) -> None:
     """Patch model config with runtime-resolved input/output dimensions."""
     num_agents = int(dims["num_agents"])
     denoise_steps = int(dims["denoise_steps"])
-    past_action_steps = int(dims["past_action_steps"])
+    past_agent_steps = int(dims["past_agent_steps"])
 
+    OmegaConf.set_struct(model_cfg, False)
     if getattr(model_cfg, "_target_", "") == "src.models.DiffLinear":
-        model_cfg.input_shape = [num_agents, past_action_steps, 2]
-        model_cfg.output_shape = [num_agents, denoise_steps, 2]
+        model_cfg["input_shape"] = [num_agents, past_agent_steps, 2]
+        model_cfg["output_shape"] = [num_agents, denoise_steps, 2]
+        OmegaConf.set_struct(model_cfg, True)
         return
 
     if getattr(model_cfg, "_target_", "") == "src.models.DiffAttention":
-        model_cfg.output_shape = [num_agents, denoise_steps, 2]
+        model_cfg["output_shape"] = [num_agents, denoise_steps, 2]
         model_cfg.final_out_dim = denoise_steps * 2
-        model_cfg.se_args.time_len = past_action_steps
+        model_cfg.se_args.time_len = past_agent_steps
         model_cfg.se_args.num_feat = 2
+        OmegaConf.set_struct(model_cfg, True)
 
 
 def build_training_modules(hparams: Any, train_mode: str) -> dict[str, Any]:
@@ -133,10 +134,11 @@ def build_training_modules(hparams: Any, train_mode: str) -> dict[str, Any]:
 
     diffusion_sampler = instantiate(hparams.diffusion_sampler)
     schedule = instantiate(hparams.scheduler) if hparams.get("scheduler") else None
+    optimizer_cfg = hparams.optimizer
     optimizer_args = {}
     if schedule is not None:
         optimizer_args["learning_rate"] = schedule
-    optim = clip_optimizer(instantiate(hparams.optimizer, **optimizer_args), grad_clip)
+    optim = clip_optimizer(instantiate(optimizer_cfg, **optimizer_args), grad_clip)
     opt_state = optim.init(trainable)
 
     return dict(
