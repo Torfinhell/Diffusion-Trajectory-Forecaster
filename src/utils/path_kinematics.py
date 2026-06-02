@@ -4,6 +4,9 @@ from src.utils.trajectory_transform import wrap_angle
 
 
 def inverse_kinematics(path, valid, action_len: int, dt: float = 0.1):
+    assert (
+        path.shape[-2] % action_len == 1
+    )  # TODO maybe support for not divisable much harder
     if valid.ndim == path.ndim:
         valid = valid[..., 0]
     num_timesteps = path.shape[-2]
