@@ -59,9 +59,7 @@ def data_process_agent(scenarios, current_index=10):
 
     agent_past = agents_info[..., : current_index + 1, :]
     agent_future = agents_info[..., current_index + 1 :, :]
-    agent_past_valid = (
-        valid_mask[..., : current_index + 1].squeeze(-1) & has_history[..., None]
-    )
+    agent_past_valid = valid_mask[..., : current_index + 1] & has_history[..., None]
     agent_future_valid = traj.valid[..., current_index + 1 :] & has_history[..., None]
     agent_past = jnp.where(
         agent_past_valid[..., None],
