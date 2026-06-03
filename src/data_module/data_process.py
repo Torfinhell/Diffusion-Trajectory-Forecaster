@@ -55,20 +55,20 @@ def data_process_agent(scenarios, current_index=10):
     history_idx = jnp.arange(current_index + 1, dtype=jnp.int32)
     last_valid_idx = jnp.max(jnp.where(history_valid, history_idx, -1), axis=-1)
     has_history = last_valid_idx >= 0
-    valid_mask = traj.valid[..., None]
+    valid_mask = traj.valid
 
     agent_past = agents_info[..., : current_index + 1, :]
     agent_future = agents_info[..., current_index + 1 :, :]
     agent_past_valid = (
-        valid_mask[..., : current_index + 1, :].squeeze(-1) & has_history[..., None]
+        valid_mask[..., : current_index + 1].squeeze(-1) & has_history[..., None]
     )
     agent_future_valid = traj.valid[..., current_index + 1 :] & has_history[..., None]
     agent_past = jnp.where(
-        valid_mask[..., : current_index + 1, :] & has_history[..., None, None],
+        agent_past_valid[..., None],
         agent_past,
         0.0,
     )
-    agent_future = jnp.where(agent_future_valid, agent_future, 0.0)
+    agent_future = jnp.where(agent_future_valid[..., None], agent_future, 0.0)
 
     is_modeled = scenarios.object_metadata.is_modeled
     is_interesting = scenarios.object_metadata.objects_of_interest
