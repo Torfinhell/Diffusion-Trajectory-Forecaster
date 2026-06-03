@@ -169,7 +169,6 @@ class BaseTrainer(L.LightningModule):
             key=step_key,
             train=is_train,
             debug=self.debug,
-            extract_actions=self.extract_actions,
             action_len=self.action_len,
             opt_state=self.opt_state if is_train else None,
             opt_update=self.optim.update if is_train else None,
@@ -220,8 +219,8 @@ class BaseTrainer(L.LightningModule):
         )
 
         def decode_one(sample, agent_past, agent_future):
-            past = AgentPath(agent_past[0], self.action_len)
-            future = AgentPath(agent_future[0], self.action_len, ref_idx=0)
+            past = AgentPath(agent_past, self.action_len)
+            future = AgentPath(agent_future, self.action_len, ref_idx=0)
             return self._decode_sample(sample, past, future)
 
         pred_xy_batch = jax.vmap(decode_one)(
@@ -229,8 +228,8 @@ class BaseTrainer(L.LightningModule):
         )
 
         def gt_xy_one(agent_past, agent_future):
-            past = AgentPath(agent_past[0], self.action_len)
-            future = AgentPath(agent_future[0], self.action_len, ref_idx=0)
+            past = AgentPath(agent_past, self.action_len)
+            future = AgentPath(agent_future, self.action_len, ref_idx=0)
             return past.trajectory_from_anchor(future)
 
         gt_xy_batch = jax.vmap(gt_xy_one)(batch["agent_past"], batch["agent_future"])
@@ -327,27 +326,12 @@ class BaseTrainer(L.LightningModule):
         def mapped_fn(single_sample_dict, single_key):
             agent_past = single_sample_dict["agent_past"]
             agent_future = single_sample_dict["agent_future"]
-            agent_past_valid = single_sample_dict.get("agent_past_valid")
-            agent_future_valid = single_sample_dict.get("agent_future_valid")
-            agents_coeffs = single_sample_dict.get("agents_coeffs")
-            model_kwargs = {
-                k: v
-                for k, v in single_sample_dict.items()
-                if k
-                not in {
-                    "agent_future",
-                    "agent_past",
-                    "agent_past_valid",
-                    "agent_future_valid",
-                    "agents_coeffs",
-                }
-            }
-
+            agent_past_valid = single_sample_dict["agent_past_valid"]
+            agent_future_valid = single_sample_dict["agent_future_valid"]
             past = AgentPath(agent_past, action_len, valid_mask=agent_past_valid)
             future = AgentPath(
                 agent_future, action_len, ref_idx=0, valid_mask=agent_future_valid
             )
-
             full_loss = loss_fn(
                 model=model,
                 diffusion_sampler=diffusion_sampler,
@@ -355,10 +339,8 @@ class BaseTrainer(L.LightningModule):
                 future_path=future,
                 key=single_key,
                 debug=debug,
-                agent_coeffs=agents_coeffs,
-                **model_kwargs,
+                **single_sample_dict,
             )
-
             return full_loss
 
         loss_dicts = jax.vmap(mapped_fn)(batch, loss_keys)
@@ -424,9 +406,9 @@ class BaseTrainer(L.LightningModule):
             pv = batch.get("agent_past_valid")
             fv = batch.get("agent_future_valid")
             past_path = AgentPath(
-                sample_past[0],
+                sample_past,
                 self.action_len,
-                valid_mask=(pv[i][0] if pv is not None else None),
+                valid_mask=(pv[i] if pv is not None else None),
             )
             pred_xy_world = past_path.xy_to_global(pred_xy_plot)
             images.append(

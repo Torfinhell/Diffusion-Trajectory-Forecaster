@@ -75,8 +75,8 @@ def run_inference_batch(
     extract_actions = bool(app_cfg.extract_actions)
     sample0_past = jnp.asarray(batch["agent_past"][0])
     sample0_future = jnp.asarray(batch["agent_future"][0])
-    past0 = AgentPath(sample0_past[0], action_len)
-    future0 = AgentPath(sample0_future[0], action_len, ref_idx=0)
+    past0 = AgentPath(sample0_past, action_len)
+    future0 = AgentPath(sample0_future, action_len, ref_idx=0)
     data_shape = past0.denoise_shape(extract_actions)
     key = jr.PRNGKey(int(time.time_ns() % (2**31)))
     sample_keys = jr.split(key, len(samples))
@@ -89,8 +89,8 @@ def run_inference_batch(
             for k, v in single_batch.items()
             if k not in {"agent_future", "agent_past"}
         }
-        past_path = AgentPath(single_batch["agent_past"][0], action_len)
-        future_path = AgentPath(single_batch["agent_future"][0], action_len, ref_idx=0)
+        past_path = AgentPath(single_batch["agent_past"], action_len)
+        future_path = AgentPath(single_batch["agent_future"], action_len, ref_idx=0)
         model_batch["past_path"] = past_path
         sampled = BaseTrainer.sample_one_sol(
             model, diffusion_sampler, data_shape, model_batch, sample_key
@@ -163,7 +163,7 @@ class InferenceQueue:
                         if s.get("scenario") is not None:
                             past_arr = jnp.asarray(s["agent_past"])
                             past_path = AgentPath(
-                                past_arr[0], int(self.app_cfg.action_len), ref_idx=-1
+                                past_arr, int(self.app_cfg.action_len), ref_idx=-1
                             )
                             pred_xy_plot = np.asarray(
                                 past_path.xy_to_global(jnp.asarray(pred_xy_local))

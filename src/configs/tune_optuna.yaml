@@ -13,6 +13,7 @@ objective:
 
 trainer:
   train_mode: "train"
+  num_agents: 32
   debug: false
   num_epochs: 10
   train_epoch_len: 1.0

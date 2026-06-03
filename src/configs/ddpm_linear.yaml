@@ -11,6 +11,7 @@ defaults:
 
 trainer:
   train_mode: "train"
+  num_agents: 32
   action_len: ${losses.action_len}
   extract_actions: ${losses.extract_actions}
   enable_profiler: false

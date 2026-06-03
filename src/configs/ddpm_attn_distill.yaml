@@ -12,6 +12,7 @@ defaults:
 
 trainer:
   action_len: ${losses.action_len}
+  num_agents: 32
   extract_actions: ${losses.extract_actions}
   enable_profiler: false
   limit_profile_batches: 3

@@ -20,9 +20,9 @@ class DiffLinear(eqx.Module):
         input_shape: list[int],
         denoise_shape: list[int],
         key,
+        **kwargs,
     ):
         k1, k2, k3 = jr.split(key, 3)
-        self.denoise_shape = denoise_shape
         traj_dim, cond_dim = prod(denoise_shape), prod(input_shape)
         self.out_shape = denoise_shape
         self.fc1 = eqx.nn.Linear(traj_dim + cond_dim + 1, hid_dim, key=k1)

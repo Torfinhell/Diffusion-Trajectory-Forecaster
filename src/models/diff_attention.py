@@ -84,7 +84,7 @@ class DiffAttention(eqx.Module):
                 eqx.nn.Linear(t_emb_dim, camlp_args["out_dim"], key=proj2_key),
             ]
         )
-        self.denoise_shape = tuple(denoise_shape)
+        self.out_shape = tuple(denoise_shape)
         self.diagonal_ca = (
             diagonal_ca if diagonal_ca is not None else (combiner_type != "transformer")
         )
