@@ -26,9 +26,9 @@ class MseActionLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
+        agent_coeffs,
         key,
         debug=False,
-        agent_coeff=None,
         **kwargs,
     ):
         valid = future_path.valid_mask
@@ -58,12 +58,23 @@ class MseActionLoss(eqx.Module):
         gt_xy = past_path.trajectory_from_anchor(future_path)
 
         err = (pred_xy - gt_xy) ** 2
+        # per-agent normalization: sum over non-agent axes, producing shape (num_agents,)
+        if err.ndim < 1:
+            raise ValueError("unexpected err shape")
+        agent_axes = tuple(range(1, err.ndim))
         valid_target = valid
         if valid_target.ndim == err.ndim - 1:
             valid_target = valid_target[..., None]
         weights = jnp.asarray(valid_target, dtype=err.dtype)
         weights = jnp.broadcast_to(weights, err.shape)
-        loss = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
+        per_agent_num = jnp.sum(err * weights, axis=agent_axes)
+        per_agent_den = jnp.maximum(jnp.sum(weights, axis=agent_axes), 1.0)
+        per_agent_loss = per_agent_num / per_agent_den
+
+        # `agent_coeffs` is required and should be provided by the caller
+        w = jnp.asarray(agent_coeffs, dtype=per_agent_loss.dtype)
+        w = jnp.reshape(w, per_agent_loss.shape)
+        loss = jnp.sum(per_agent_loss * w) / jnp.maximum(jnp.sum(w), 1.0)
         loss_dict = {"loss": loss}
         if debug:
             xy_valid_weights = jnp.asarray(valid_target, dtype=gt_xy.dtype)
@@ -84,14 +95,23 @@ class MseActionLoss(eqx.Module):
                     "valid_ratio": jnp.mean(xy_valid_weights),
                 }
             )
-        # scale by agent coefficient if provided (batch-level aggregation expects this)
-        agent_coeff = (
-            kwargs.pop("agent_coeff", agent_coeff)
-            if "agent_coeff" in kwargs
-            else agent_coeff
-        )
-        if agent_coeff is not None:
-            loss_dict = jax.tree_map(
-                lambda v: v * jnp.asarray(agent_coeff, dtype=v.dtype), loss_dict
+        if debug:
+            xy_valid_weights = jnp.asarray(valid_target, dtype=gt_xy.dtype)
+            action_valid_weights = jnp.asarray(actions_valid, dtype=noisy_actions.dtype)
+            loss_dict.update(
+                {
+                    "noisy_abs_mean": masked_abs_mean(
+                        noisy_actions, action_valid_weights[..., None]
+                    ),
+                    "target_abs_mean": masked_abs_mean(gt_xy, xy_valid_weights),
+                    "pred_abs_mean": masked_abs_mean(pred_xy, xy_valid_weights),
+                    "target_action_abs_mean": masked_abs_mean(
+                        gt_actions, action_valid_weights[..., None]
+                    ),
+                    "pred_action_abs_mean": masked_abs_mean(
+                        pred_actions, action_valid_weights[..., None]
+                    ),
+                    "valid_ratio": jnp.mean(xy_valid_weights),
+                }
             )
         return loss_dict

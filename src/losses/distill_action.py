@@ -139,6 +139,19 @@ class KDLoss(eqx.Module):
         weights = jnp.broadcast_to(weights, err.shape)
         l_gt = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
 
+        # compute per-agent L_gt then aggregate across agents using agent_coeffs
+        if err.ndim < 1:
+            raise ValueError("unexpected err shape")
+        agent_axes = tuple(range(1, err.ndim))
+        per_agent_num = jnp.sum(err * weights, axis=agent_axes)
+        per_agent_den = jnp.maximum(jnp.sum(weights, axis=agent_axes), 1.0)
+        per_agent_l_gt = per_agent_num / per_agent_den
+
+        agent_coeffs = kwargs.pop("agent_coeffs")
+        w = jnp.asarray(agent_coeffs, dtype=per_agent_l_gt.dtype)
+        w = jnp.reshape(w, per_agent_l_gt.shape)
+        l_gt = jnp.sum(per_agent_l_gt * w) / jnp.maximum(jnp.sum(w), 1.0)
+
         stats = {"L_gt": l_gt}
         total = self.lambdas["gt"] * l_gt
 
@@ -149,29 +162,40 @@ class KDLoss(eqx.Module):
         for feat_key, lam in self.lambdas.items():
             if feat_key == "gt" or lam == 0.0:
                 continue
+            # compute per-agent loss for the feature, then aggregate using agent_coeffs
             if feat_key == "out":
-                loss_term = jnp.mean((student_out - teacher_out) ** 2)
+                diff = (student_out - teacher_out) ** 2
+                agent_axes = tuple(range(1, diff.ndim))
+                per_agent = jnp.mean(diff, axis=agent_axes)
             elif feat_key == "kv_cond":
                 projs = projectors[feat_key]
-                loss_term = jnp.mean(
-                    (
-                        _project(projs[0], student_feats[feat_key])
-                        - teacher_feats[feat_key]
-                    )
-                    ** 2
-                )
+                diff = (
+                    _project(projs[0], student_feats[feat_key])
+                    - teacher_feats[feat_key]
+                ) ** 2
+                agent_axes = tuple(range(1, diff.ndim))
+                per_agent = jnp.mean(diff, axis=agent_axes)
             else:
                 projs = projectors[feat_key]
                 t_list = teacher_feats[feat_key]
                 s_list = student_feats[feat_key]
                 if len(t_list) == 0:
-                    loss_term = jnp.zeros(())
+                    per_agent = jnp.zeros((student_out.shape[0],))
                 else:
-                    layer_losses = [
-                        jnp.mean((_project(projs[i], s_list[i]) - t_list[i]) ** 2)
-                        for i in range(len(t_list))
-                    ]
-                    loss_term = sum(layer_losses) / len(layer_losses)
+                    layer_losses = []
+                    for i in range(len(t_list)):
+                        diff_i = (_project(projs[i], s_list[i]) - t_list[i]) ** 2
+                        agent_axes = tuple(range(1, diff_i.ndim))
+                        per_layer = jnp.mean(diff_i, axis=agent_axes)
+                        layer_losses.append(per_layer)
+                    # average across layers (per-agent)
+                    per_agent = sum(layer_losses) / len(layer_losses)
+
+            # aggregate per-agent values using provided agent_coeffs
+            w = jnp.asarray(agent_coeffs, dtype=per_agent.dtype)
+            w = jnp.reshape(w, per_agent.shape)
+            loss_term = jnp.sum(per_agent * w) / jnp.maximum(jnp.sum(w), 1.0)
+
             stats[f"L_{feat_key}"] = loss_term
             total = total + lam * loss_term
         return total, stats
@@ -182,9 +206,9 @@ class KDLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
+        agent_coeffs,
         key,
         debug=False,
-        agent_coeff=None,
         **kwargs,
     ):
         valid = future_path.valid_mask
@@ -197,6 +221,11 @@ class KDLoss(eqx.Module):
         gt_actions_norm = gt_actions / action_scale
 
         n = self.perturbation_per_sample
+
+        # `agent_coeffs` is required and should be provided by the caller
+        if agent_coeffs is not None:
+            kwargs["agent_coeffs"] = agent_coeffs
+
         if n == 1:
             total, stats = self._loss_one_draw(
                 model,
@@ -230,14 +259,4 @@ class KDLoss(eqx.Module):
         loss_dict = {"loss": total}
         if debug:
             loss_dict.update(stats)
-        # scale by agent coefficient if provided
-        agent_coeff = (
-            kwargs.pop("agent_coeff", agent_coeff)
-            if "agent_coeff" in kwargs
-            else agent_coeff
-        )
-        if agent_coeff is not None:
-            loss_dict = jax.tree_map(
-                lambda v: v * jnp.asarray(agent_coeff, dtype=v.dtype), loss_dict
-            )
         return loss_dict

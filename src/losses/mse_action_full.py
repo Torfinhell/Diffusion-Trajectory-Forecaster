@@ -20,9 +20,9 @@ class MseActionFullLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
+        agent_coeffs,
         key,
         debug: bool = False,
-        agent_coeff=None,
         **kwargs,
     ):
         valid = future_path.valid_mask
@@ -46,14 +46,19 @@ class MseActionFullLoss(eqx.Module):
         )
         pred_actions = pred_actions_norm * action_scale
 
-        # action-space MSE
+        # action-space MSE per-agent
         err_actions = (pred_actions - gt_actions) ** 2
+        if err_actions.ndim < 1:
+            raise ValueError("unexpected err_actions shape")
+        agent_axes = tuple(range(1, err_actions.ndim))
         a_valid = actions_valid
         if a_valid.ndim == err_actions.ndim - 1:
             a_valid = a_valid[..., None]
         a_weights = jnp.asarray(a_valid, dtype=err_actions.dtype)
         a_weights = jnp.broadcast_to(a_weights, err_actions.shape)
-        mse_action = (err_actions * a_weights).sum() / jnp.maximum(a_weights.sum(), 1.0)
+        per_agent_num_a = jnp.sum(err_actions * a_weights, axis=agent_axes)
+        per_agent_den_a = jnp.maximum(jnp.sum(a_weights, axis=agent_axes), 1.0)
+        per_agent_mse_action = per_agent_num_a / per_agent_den_a
 
         # decode to full trajectory (xy) from predicted actions using past_path as anchor
         pred_full_xy = past_path.trajectory_from_actions(
@@ -63,23 +68,28 @@ class MseActionFullLoss(eqx.Module):
         )
         gt_xy = past_path.trajectory_from_anchor(future_path)
         err_xy = (pred_full_xy - gt_xy) ** 2
+        if err_xy.ndim < 1:
+            raise ValueError("unexpected err_xy shape")
+        agent_axes_xy = tuple(range(1, err_xy.ndim))
         v = valid
         if v.ndim == err_xy.ndim - 1:
             v = v[..., None]
         v_weights = jnp.asarray(v, dtype=err_xy.dtype)
         v_weights = jnp.broadcast_to(v_weights, err_xy.shape)
-        mse_xy_full = (err_xy * v_weights).sum() / jnp.maximum(v_weights.sum(), 1.0)
+        per_agent_num_xy = jnp.sum(err_xy * v_weights, axis=agent_axes_xy)
+        per_agent_den_xy = jnp.maximum(jnp.sum(v_weights, axis=agent_axes_xy), 1.0)
+        per_agent_mse_xy_full = per_agent_num_xy / per_agent_den_xy
+
+        # `agent_coeffs` is required and should be provided by the caller
+        w = jnp.asarray(agent_coeffs, dtype=per_agent_mse_action.dtype)
+        w = jnp.reshape(w, per_agent_mse_action.shape)
+        mse_action = jnp.sum(per_agent_mse_action * w) / jnp.maximum(jnp.sum(w), 1.0)
+        w_xy = jnp.asarray(agent_coeffs, dtype=per_agent_mse_xy_full.dtype)
+        w_xy = jnp.reshape(w_xy, per_agent_mse_xy_full.shape)
+        mse_xy_full = jnp.sum(per_agent_mse_xy_full * w_xy) / jnp.maximum(
+            jnp.sum(w_xy), 1.0
+        )
 
         loss_dict = {"loss": mse_action}
         loss_dict.update({"mse_xy_full": mse_xy_full})
-        # scale by agent coefficient if provided
-        agent_coeff = (
-            kwargs.pop("agent_coeff", agent_coeff)
-            if "agent_coeff" in kwargs
-            else agent_coeff
-        )
-        if agent_coeff is not None:
-            loss_dict = jax.tree_map(
-                lambda v: v * jnp.asarray(agent_coeff, dtype=v.dtype), loss_dict
-            )
         return loss_dict

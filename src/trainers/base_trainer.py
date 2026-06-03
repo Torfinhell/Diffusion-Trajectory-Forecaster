@@ -343,43 +343,23 @@ class BaseTrainer(L.LightningModule):
                 }
             }
 
-            num_agents = agent_past.shape[0]
-            agent_keys = jr.split(single_key, num_agents)
-
-            def per_agent_fn(ap, af, ap_valid, af_valid, coeff, akey):
-                past = AgentPath(ap, action_len, valid_mask=ap_valid)
-                future = AgentPath(af, action_len, ref_idx=0, valid_mask=af_valid)
-                return loss_fn(
-                    model=model,
-                    diffusion_sampler=diffusion_sampler,
-                    past_path=past,
-                    future_path=future,
-                    key=akey,
-                    debug=debug,
-                    agent_coeff=coeff,
-                    **model_kwargs,
-                )
-
-            per_agent_losses = jax.vmap(per_agent_fn)(
-                agent_past,
-                agent_future,
-                agent_past_valid,
-                agent_future_valid,
-                agents_coeffs,
-                agent_keys,
+            past = AgentPath(agent_past, action_len, valid_mask=agent_past_valid)
+            future = AgentPath(
+                agent_future, action_len, ref_idx=0, valid_mask=agent_future_valid
             )
 
-            def aggregate(x):
-                # per-agent losses are already scaled by agent_coeff inside the loss;
-                # here we sum across agents and normalize by the total weight.
-                w = agents_coeffs
-                if w is None:
-                    w = jnp.ones((num_agents,), dtype=jnp.float32)
-                w = jnp.asarray(w, dtype=x.dtype)
-                total_w = jnp.sum(w)
-                return jnp.sum(x, axis=0) / jnp.maximum(total_w, 1.0)
+            full_loss = loss_fn(
+                model=model,
+                diffusion_sampler=diffusion_sampler,
+                past_path=past,
+                future_path=future,
+                key=single_key,
+                debug=debug,
+                agent_coeffs=agents_coeffs,
+                **model_kwargs,
+            )
 
-            return jax.tree_map(aggregate, per_agent_losses)
+            return full_loss
 
         loss_dicts = jax.vmap(mapped_fn)(batch, loss_keys)
         return jax.tree.map(lambda x: jnp.mean(x, axis=0), loss_dicts)

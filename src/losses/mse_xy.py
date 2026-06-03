@@ -24,9 +24,9 @@ class MseXYLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
+        agent_coeffs,
         key,
         debug=False,
-        agent_coeff=None,
         **kwargs,
     ):
         valid = future_path.valid_mask
@@ -41,12 +41,22 @@ class MseXYLoss(eqx.Module):
         y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
         pred_xy = model(timestep, y, **kwargs)
         err = (pred_xy - gt_xy) ** 2
+        if err.ndim < 1:
+            raise ValueError("unexpected err shape")
+        agent_axes = tuple(range(1, err.ndim))
         valid_target = valid
         if valid_target.ndim == err.ndim - 1:
             valid_target = valid_target[..., None]
         weights = jnp.asarray(valid_target, dtype=err.dtype)
         weights = jnp.broadcast_to(weights, err.shape)
-        loss = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
+        per_agent_num = jnp.sum(err * weights, axis=agent_axes)
+        per_agent_den = jnp.maximum(jnp.sum(weights, axis=agent_axes), 1.0)
+        per_agent_loss = per_agent_num / per_agent_den
+
+        # `agent_coeffs` is required and should be provided by the caller
+        w = jnp.asarray(agent_coeffs, dtype=per_agent_loss.dtype)
+        w = jnp.reshape(w, per_agent_loss.shape)
+        loss = jnp.sum(per_agent_loss * w) / jnp.maximum(jnp.sum(w), 1.0)
         loss_dict = {"loss": loss}
         if debug:
             valid_weights = jnp.asarray(valid, dtype=gt_xy.dtype)
@@ -57,15 +67,5 @@ class MseXYLoss(eqx.Module):
                     "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
                     "valid_ratio": jnp.mean(valid_weights),
                 }
-            )
-        # scale by agent coefficient if provided
-        agent_coeff = (
-            kwargs.pop("agent_coeff", agent_coeff)
-            if "agent_coeff" in kwargs
-            else agent_coeff
-        )
-        if agent_coeff is not None:
-            loss_dict = jax.tree_map(
-                lambda v: v * jnp.asarray(agent_coeff, dtype=v.dtype), loss_dict
             )
         return loss_dict
