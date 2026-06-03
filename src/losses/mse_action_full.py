@@ -6,13 +6,7 @@ import jax.random as jr
 from src.data_module.agent_path import AgentPath
 
 
-def masked_abs_mean(values, weights):
-    values = jnp.asarray(values)
-    weights = jnp.asarray(weights, dtype=values.dtype)
-    return (jnp.abs(values) * weights).sum() / jnp.maximum(weights.sum(), 1.0)
-
-
-class MseActionLoss(eqx.Module):
+class MseActionFullLoss(eqx.Module):
     accel_scale: float
     yaw_rate_scale: float
 
@@ -27,13 +21,14 @@ class MseActionLoss(eqx.Module):
         past_path: AgentPath,
         future_path: AgentPath,
         key,
-        debug=False,
+        debug: bool = False,
         agent_coeff=None,
         **kwargs,
     ):
         valid = future_path.valid_mask
         if valid is None:
             valid = jnp.ones((future_path.path.shape[0],), dtype=bool)
+
         gt_actions, actions_valid = future_path.actions(valid)
         action_scale = jnp.asarray(
             [self.accel_scale, self.yaw_rate_scale], dtype=gt_actions.dtype
@@ -49,42 +44,35 @@ class MseActionLoss(eqx.Module):
         pred_actions_norm = model(
             timestep, noisy_actions, **kwargs, past_path=past_path
         )
-        pred_xy = past_path.decode_action_sample(
-            pred_actions_norm,
+        pred_actions = pred_actions_norm * action_scale
+
+        # action-space MSE
+        err_actions = (pred_actions - gt_actions) ** 2
+        a_valid = actions_valid
+        if a_valid.ndim == err_actions.ndim - 1:
+            a_valid = a_valid[..., None]
+        a_weights = jnp.asarray(a_valid, dtype=err_actions.dtype)
+        a_weights = jnp.broadcast_to(a_weights, err_actions.shape)
+        mse_action = (err_actions * a_weights).sum() / jnp.maximum(a_weights.sum(), 1.0)
+
+        # decode to full trajectory (xy) from predicted actions using past_path as anchor
+        pred_full_xy = past_path.trajectory_from_actions(
+            pred_actions,
             accel_scale=self.accel_scale,
             yaw_rate_scale=self.yaw_rate_scale,
         )
-        pred_actions = pred_actions_norm * action_scale
         gt_xy = past_path.trajectory_from_anchor(future_path)
+        err_xy = (pred_full_xy - gt_xy) ** 2
+        v = valid
+        if v.ndim == err_xy.ndim - 1:
+            v = v[..., None]
+        v_weights = jnp.asarray(v, dtype=err_xy.dtype)
+        v_weights = jnp.broadcast_to(v_weights, err_xy.shape)
+        mse_xy_full = (err_xy * v_weights).sum() / jnp.maximum(v_weights.sum(), 1.0)
 
-        err = (pred_xy - gt_xy) ** 2
-        valid_target = valid
-        if valid_target.ndim == err.ndim - 1:
-            valid_target = valid_target[..., None]
-        weights = jnp.asarray(valid_target, dtype=err.dtype)
-        weights = jnp.broadcast_to(weights, err.shape)
-        loss = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
-        loss_dict = {"loss": loss}
-        if debug:
-            xy_valid_weights = jnp.asarray(valid_target, dtype=gt_xy.dtype)
-            action_valid_weights = jnp.asarray(actions_valid, dtype=noisy_actions.dtype)
-            loss_dict.update(
-                {
-                    "noisy_abs_mean": masked_abs_mean(
-                        noisy_actions, action_valid_weights[..., None]
-                    ),
-                    "target_abs_mean": masked_abs_mean(gt_xy, xy_valid_weights),
-                    "pred_abs_mean": masked_abs_mean(pred_xy, xy_valid_weights),
-                    "target_action_abs_mean": masked_abs_mean(
-                        gt_actions, action_valid_weights[..., None]
-                    ),
-                    "pred_action_abs_mean": masked_abs_mean(
-                        pred_actions, action_valid_weights[..., None]
-                    ),
-                    "valid_ratio": jnp.mean(xy_valid_weights),
-                }
-            )
-        # scale by agent coefficient if provided (batch-level aggregation expects this)
+        loss_dict = {"loss": mse_action}
+        loss_dict.update({"mse_xy_full": mse_xy_full})
+        # scale by agent coefficient if provided
         agent_coeff = (
             kwargs.pop("agent_coeff", agent_coeff)
             if "agent_coeff" in kwargs

@@ -132,12 +132,6 @@ class BaseTrainer(L.LightningModule):
             getattr(self.loss_fn, "coord_scale", 1.0),
         )
 
-    @staticmethod
-    def build_paths(agent_past, agent_future, action_len):
-        past_path = AgentPath(agent_past, action_len, ref_idx=-1)
-        future_path = AgentPath(agent_future, action_len, ref_idx=0)
-        return past_path, future_path
-
     def _decode_sample(self, sampled, past_path, future_path):
         accel_scale, yaw_rate_scale, coord_scale = self._loss_scales()
         if self.extract_actions:
@@ -214,10 +208,7 @@ class BaseTrainer(L.LightningModule):
             return step_out["loss"]
 
         batch_size = batch["agent_future"].shape[0]
-        past_path, future_path = self.build_paths(
-            batch["agent_past"][0], batch["agent_future"][0], self.action_len
-        )
-        data_shape = past_path.denoise_shape(self.extract_actions)
+        data_shape = self.model.denoise_shape(self.extract_actions)
         self.sample_key, key = jr.split(self.sample_key)
         sample_keys = jr.split(key, batch_size)
         sampled_pred_batch = self.sample_batch_sol(
@@ -229,9 +220,8 @@ class BaseTrainer(L.LightningModule):
         )
 
         def decode_one(sample, agent_past, agent_future):
-            past, future = BaseTrainer.build_paths(
-                agent_past, agent_future, self.action_len
-            )
+            past = AgentPath(agent_past[0], self.action_len)
+            future = AgentPath(agent_future[0], self.action_len, ref_idx=0)
             return self._decode_sample(sample, past, future)
 
         pred_xy_batch = jax.vmap(decode_one)(
@@ -239,10 +229,9 @@ class BaseTrainer(L.LightningModule):
         )
 
         def gt_xy_one(agent_past, agent_future):
-            past, future = BaseTrainer.build_paths(
-                agent_past, agent_future, self.action_len
-            )
-            return future.future_xy_in_past_frame(past)
+            past = AgentPath(agent_past[0], self.action_len)
+            future = AgentPath(agent_future[0], self.action_len, ref_idx=0)
+            return past.trajectory_from_anchor(future)
 
         gt_xy_batch = jax.vmap(gt_xy_one)(batch["agent_past"], batch["agent_future"])
         batch.update(
@@ -275,7 +264,6 @@ class BaseTrainer(L.LightningModule):
         batch,
         key,
         train,
-        extract_actions,
         action_len,
         debug=False,
         opt_state=None,
@@ -337,29 +325,61 @@ class BaseTrainer(L.LightningModule):
         loss_keys = jr.split(key, jax.tree_util.tree_leaves(batch)[0].shape[0])
 
         def mapped_fn(single_sample_dict, single_key):
-            past_path, future_path = BaseTrainer.build_paths(
-                single_sample_dict["agent_past"],
-                single_sample_dict["agent_future"],
-                action_len,
-            )
-            # TODO
-            # past_valid = jnp.any(
-            #     single_sample_dict["agent_past"][..., :2] != 0, axis=-1
-            # )
+            agent_past = single_sample_dict["agent_past"]
+            agent_future = single_sample_dict["agent_future"]
+            agent_past_valid = single_sample_dict.get("agent_past_valid")
+            agent_future_valid = single_sample_dict.get("agent_future_valid")
+            agents_coeffs = single_sample_dict.get("agents_coeffs")
             model_kwargs = {
                 k: v
                 for k, v in single_sample_dict.items()
-                if k not in {"agent_future", "agent_past"}
+                if k
+                not in {
+                    "agent_future",
+                    "agent_past",
+                    "agent_past_valid",
+                    "agent_future_valid",
+                    "agents_coeffs",
+                }
             }
-            return loss_fn(
-                model=model,
-                diffusion_sampler=diffusion_sampler,
-                past_path=past_path,
-                future_path=future_path,
-                key=single_key,
-                debug=debug,
-                **model_kwargs,
+
+            num_agents = agent_past.shape[0]
+            agent_keys = jr.split(single_key, num_agents)
+
+            def per_agent_fn(ap, af, ap_valid, af_valid, coeff, akey):
+                past = AgentPath(ap, action_len, valid_mask=ap_valid)
+                future = AgentPath(af, action_len, ref_idx=0, valid_mask=af_valid)
+                return loss_fn(
+                    model=model,
+                    diffusion_sampler=diffusion_sampler,
+                    past_path=past,
+                    future_path=future,
+                    key=akey,
+                    debug=debug,
+                    agent_coeff=coeff,
+                    **model_kwargs,
+                )
+
+            per_agent_losses = jax.vmap(per_agent_fn)(
+                agent_past,
+                agent_future,
+                agent_past_valid,
+                agent_future_valid,
+                agents_coeffs,
+                agent_keys,
             )
+
+            def aggregate(x):
+                # per-agent losses are already scaled by agent_coeff inside the loss;
+                # here we sum across agents and normalize by the total weight.
+                w = agents_coeffs
+                if w is None:
+                    w = jnp.ones((num_agents,), dtype=jnp.float32)
+                w = jnp.asarray(w, dtype=x.dtype)
+                total_w = jnp.sum(w)
+                return jnp.sum(x, axis=0) / jnp.maximum(total_w, 1.0)
+
+            return jax.tree_map(aggregate, per_agent_losses)
 
         loss_dicts = jax.vmap(mapped_fn)(batch, loss_keys)
         return jax.tree.map(lambda x: jnp.mean(x, axis=0), loss_dicts)
@@ -419,8 +439,14 @@ class BaseTrainer(L.LightningModule):
             pred_xy_plot = self._mask_pred_for_plot(
                 pred_xy_batch[i], batch["agents_coeffs"][i]
             )
-            past_path, _ = self.build_paths(
-                batch["agent_past"][i], batch["agent_future"][i], self.action_len
+            sample_past = batch["agent_past"][i]
+            sample_future = batch["agent_future"][i]
+            pv = batch.get("agent_past_valid")
+            fv = batch.get("agent_future_valid")
+            past_path = AgentPath(
+                sample_past[0],
+                self.action_len,
+                valid_mask=(pv[i][0] if pv is not None else None),
             )
             pred_xy_world = past_path.xy_to_global(pred_xy_plot)
             images.append(

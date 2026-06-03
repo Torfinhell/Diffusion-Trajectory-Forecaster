@@ -1,6 +1,5 @@
 preprocessing:
   current_index: 9
-  use_full_agent_info: false
   extract_map: false
   extract_traffic: true
   extract_relations: false

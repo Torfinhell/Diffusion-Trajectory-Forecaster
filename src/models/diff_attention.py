@@ -27,7 +27,7 @@ class DiffAttention(eqx.Module):
         num_sa_mlp,
         camlp_args,
         num_camlp,
-        out_shape: list[int],
+        denoise_shape: list[int],
         final_out_dim: int,
         key,
         num_diffusion_steps: int = 50,
@@ -75,16 +75,19 @@ class DiffAttention(eqx.Module):
             out_features=final_out_dim,
             key=out_key,
         )
+        # determine the denoise/output shape early so projection dims can be set
         proj1_key, proj2_key = jr.split(proj_key)
         self.input_proj = eqx.nn.Sequential(
             [
-                eqx.nn.Linear(out_shape[1] * 2, t_emb_dim, key=proj1_key),
+                eqx.nn.Linear(denoise_shape[1] * 2, t_emb_dim, key=proj1_key),
                 eqx.nn.Lambda(jnn.relu),
                 eqx.nn.Linear(t_emb_dim, camlp_args["out_dim"], key=proj2_key),
             ]
         )
-        self.out_shape = tuple(out_shape)
-        self.diagonal_ca = diagonal_ca if diagonal_ca is not None else (combiner_type != "transformer")
+        self.denoise_shape = tuple(denoise_shape)
+        self.diagonal_ca = (
+            diagonal_ca if diagonal_ca is not None else (combiner_type != "transformer")
+        )
 
     def _forward_impl(self, t_noise, x_t, *, collect_features: bool, **batch_kwargs):
         if x_t.ndim == 3:

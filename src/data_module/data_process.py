@@ -46,29 +46,10 @@ def data_process_traffic_light(scenarios, current_index=10):
     }
 
 
-@jax.jit(static_argnames=["current_index", "use_full_agent_info"])
-def data_process_agent(
-    scenarios,
-    current_index=10,
-    use_full_agent_info=True,
-):
+@jax.jit(static_argnames=["current_index"])
+def data_process_agent(scenarios, current_index=10):
     traj = scenarios.log_trajectory
-
-    if use_full_agent_info:
-        agents_info = jnp.stack(
-            [traj.x, traj.y, traj.yaw, traj.vel_x, traj.vel_y], axis=-1
-        )
-    else:
-        agents_info = jnp.stack(
-            [
-                traj.x,
-                traj.y,
-                jnp.zeros_like(traj.x),
-                jnp.zeros_like(traj.x),
-                jnp.zeros_like(traj.x),
-            ],
-            axis=-1,
-        )
+    agents_info = jnp.stack([traj.x, traj.y, traj.yaw, traj.vel_x, traj.vel_y], axis=-1)
 
     history_valid = traj.valid[..., : current_index + 1]
     history_idx = jnp.arange(current_index + 1, dtype=jnp.int32)
@@ -78,6 +59,9 @@ def data_process_agent(
 
     agent_past = agents_info[..., : current_index + 1, :]
     agent_future = agents_info[..., current_index + 1 :, :]
+    agent_past_valid = (
+        valid_mask[..., : current_index + 1, :].squeeze(-1) & has_history[..., None]
+    )
     agent_future_valid = (
         traj.valid[..., current_index + 1 :, None] & has_history[..., None, None]
     )
@@ -97,6 +81,7 @@ def data_process_agent(
     return {
         "agent_past": agent_past,
         "agent_future": agent_future,
+        "agent_past_valid": agent_past_valid,
         "agent_future_valid": agent_future_valid,
         "agents_valid": has_history & is_valid,
         "agents_coeffs": agents_coeffs,
@@ -268,7 +253,6 @@ def calculate_relations(agents_info, polylines_info, traffic_lights_info):
 @jax.jit(
     static_argnames=[
         "current_index",
-        "use_full_agent_info",
         "max_polylines",
         "num_points_polyline",
         "extract_map",
@@ -279,7 +263,6 @@ def calculate_relations(agents_info, polylines_info, traffic_lights_info):
 def data_process_scenarios(
     scenarios,
     current_index=10,
-    use_full_agent_info=True,
     max_polylines=256,
     num_points_polyline=30,
     extract_map=True,
@@ -298,11 +281,7 @@ def data_process_scenarios(
         traffic_info = data_process_traffic_light(
             scenarios, current_index=current_index
         )
-    agents_info = data_process_agent(
-        scenarios,
-        current_index=current_index,
-        use_full_agent_info=use_full_agent_info,
-    )
+    agents_info = data_process_agent(scenarios, current_index=current_index)
     map_info = {}
     if extract_map:
         map_info = data_process_map(
@@ -330,7 +309,6 @@ def data_process_scenarios(
 @jax.jit(
     static_argnames=[
         "current_index",
-        "use_full_agent_info",
         "max_polylines",
         "num_points_polyline",
         "extract_map",
@@ -341,7 +319,6 @@ def data_process_scenarios(
 def data_process_scenarios_batch(
     scenarios,
     current_index=10,
-    use_full_agent_info=True,
     max_polylines=256,
     num_points_polyline=30,
     extract_map=True,
@@ -352,7 +329,6 @@ def data_process_scenarios_batch(
         lambda scenario: data_process_scenarios(
             scenario,
             current_index=current_index,
-            use_full_agent_info=use_full_agent_info,
             max_polylines=max_polylines,
             num_points_polyline=num_points_polyline,
             extract_map=extract_map,

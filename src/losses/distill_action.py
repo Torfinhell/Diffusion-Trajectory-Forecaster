@@ -92,8 +92,6 @@ class KDLoss(eqx.Module):
         gt_actions_norm,
         past_path: AgentPath,
         future_path: AgentPath,
-        agents_coeffs,
-        agent_future_valid,
         key,
         **kwargs,
     ):
@@ -130,13 +128,14 @@ class KDLoss(eqx.Module):
             accel_scale=self.accel_scale,
             yaw_rate_scale=self.yaw_rate_scale,
         )
-        gt_xy = future_path.future_xy_in_past_frame(past_path)
+        gt_xy = past_path.trajectory_from_anchor(future_path)
         err = (pred_xy - gt_xy) ** 2
-        valid_target = agent_future_valid
+        valid_target = future_path.valid_mask
+        if valid_target is None:
+            valid_target = jnp.ones((future_path.path.shape[0],), dtype=bool)
         if valid_target.ndim == err.ndim - 1:
             valid_target = valid_target[..., None]
-        weights = jnp.asarray(agents_coeffs, dtype=err.dtype)[..., None, None]
-        weights = weights * jnp.asarray(valid_target, dtype=err.dtype)
+        weights = jnp.asarray(valid_target, dtype=err.dtype)
         weights = jnp.broadcast_to(weights, err.shape)
         l_gt = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
 
@@ -183,15 +182,14 @@ class KDLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
-        agents_coeffs,
-        agent_future_valid,
         key,
         debug=False,
+        agent_coeff=None,
         **kwargs,
     ):
-        valid = agent_future_valid
-        if valid.ndim == future_path.path.ndim:
-            valid = valid[..., 0]
+        valid = future_path.valid_mask
+        if valid is None:
+            valid = jnp.ones((future_path.path.shape[0],), dtype=bool)
         gt_actions, _ = future_path.actions(valid)
         action_scale = jnp.asarray(
             [self.accel_scale, self.yaw_rate_scale], dtype=gt_actions.dtype
@@ -207,8 +205,6 @@ class KDLoss(eqx.Module):
                 gt_actions_norm,
                 past_path,
                 future_path,
-                agents_coeffs,
-                agent_future_valid,
                 key,
                 **kwargs,
             )
@@ -223,8 +219,6 @@ class KDLoss(eqx.Module):
                     gt_actions_norm,
                     past_path,
                     future_path,
-                    agents_coeffs,
-                    agent_future_valid,
                     draw_key,
                     **kwargs,
                 )
@@ -236,4 +230,14 @@ class KDLoss(eqx.Module):
         loss_dict = {"loss": total}
         if debug:
             loss_dict.update(stats)
+        # scale by agent coefficient if provided
+        agent_coeff = (
+            kwargs.pop("agent_coeff", agent_coeff)
+            if "agent_coeff" in kwargs
+            else agent_coeff
+        )
+        if agent_coeff is not None:
+            loss_dict = jax.tree_map(
+                lambda v: v * jnp.asarray(agent_coeff, dtype=v.dtype), loss_dict
+            )
         return loss_dict

@@ -1,4 +1,5 @@
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 
@@ -23,13 +24,15 @@ class MseXYLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
-        agents_coeffs,
-        agent_future_valid,
         key,
         debug=False,
+        agent_coeff=None,
         **kwargs,
     ):
-        gt_xy = future_path.local_xy() / self.coord_scale
+        valid = future_path.valid_mask
+        if valid is None:
+            valid = jnp.ones((future_path.path.shape[0],), dtype=bool)
+        gt_xy = past_path.trajectory_from_anchor(future_path) / self.coord_scale
         timestep_key, noise_key = jr.split(key)
         timestep = jr.randint(
             timestep_key, shape=(), minval=0, maxval=diffusion_sampler.num_steps
@@ -38,16 +41,15 @@ class MseXYLoss(eqx.Module):
         y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
         pred_xy = model(timestep, y, **kwargs)
         err = (pred_xy - gt_xy) ** 2
-        weights = jnp.asarray(agents_coeffs, dtype=err.dtype)[
-            ..., None, None
-        ] * jnp.asarray(agent_future_valid, dtype=err.dtype)
+        valid_target = valid
+        if valid_target.ndim == err.ndim - 1:
+            valid_target = valid_target[..., None]
+        weights = jnp.asarray(valid_target, dtype=err.dtype)
         weights = jnp.broadcast_to(weights, err.shape)
-        loss = (err * weights).sum() / jnp.maximum(
-            (jnp.ones_like(err) * weights).sum(), 1.0
-        )
+        loss = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
         loss_dict = {"loss": loss}
         if debug:
-            valid_weights = jnp.asarray(agent_future_valid, dtype=gt_xy.dtype)
+            valid_weights = jnp.asarray(valid, dtype=gt_xy.dtype)
             loss_dict.update(
                 {
                     "noisy_abs_mean": masked_abs_mean(y, valid_weights),
@@ -55,5 +57,15 @@ class MseXYLoss(eqx.Module):
                     "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
                     "valid_ratio": jnp.mean(valid_weights),
                 }
+            )
+        # scale by agent coefficient if provided
+        agent_coeff = (
+            kwargs.pop("agent_coeff", agent_coeff)
+            if "agent_coeff" in kwargs
+            else agent_coeff
+        )
+        if agent_coeff is not None:
+            loss_dict = jax.tree_map(
+                lambda v: v * jnp.asarray(agent_coeff, dtype=v.dtype), loss_dict
             )
         return loss_dict

@@ -18,12 +18,13 @@ class DiffLinear(eqx.Module):
         self,
         hid_dim: int,
         input_shape: list[int],
-        output_shape: list[int],
+        denoise_shape: list[int],
         key,
     ):
         k1, k2, k3 = jr.split(key, 3)
-        traj_dim, cond_dim = prod(output_shape), prod(input_shape)
-        self.out_shape = output_shape
+        self.denoise_shape = denoise_shape
+        traj_dim, cond_dim = prod(denoise_shape), prod(input_shape)
+        self.out_shape = denoise_shape
         self.fc1 = eqx.nn.Linear(traj_dim + cond_dim + 1, hid_dim, key=k1)
         self.fc2 = eqx.nn.Linear(hid_dim, hid_dim, key=k2)
         self.fc_out = eqx.nn.Linear(hid_dim, traj_dim, key=k3)
@@ -32,7 +33,7 @@ class DiffLinear(eqx.Module):
         x = jnp.concatenate(
             [
                 x_t.reshape(-1),
-                past_path.to_local()[..., :2].reshape(-1),
+                past_path.local_xy().reshape(-1),
                 jnp.atleast_1d(t_noise),
             ],
             axis=0,

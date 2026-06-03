@@ -1,2 +1,3 @@
 _target_: src.models.DiffLinear
 hid_dim: 256
+num_agents: ${trainer.num_agents}

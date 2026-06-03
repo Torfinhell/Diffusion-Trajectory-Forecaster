@@ -10,7 +10,7 @@ se_args:
   drop_attn: 0.1
   mlp_dim: 128
   num_mlp_layers: 2
-  num_agents: 32
+  num_agents: ${trainer.num_agents}
   time_len: 2
   num_feat: 2
   out_dim: 80
