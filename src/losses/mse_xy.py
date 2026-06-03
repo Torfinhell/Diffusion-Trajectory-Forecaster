@@ -24,7 +24,7 @@ class MseXYLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
-        agent_coeffs,
+        agents_coeffs,
         key,
         debug=False,
         **kwargs,
@@ -53,8 +53,8 @@ class MseXYLoss(eqx.Module):
         per_agent_den = jnp.maximum(jnp.sum(weights, axis=agent_axes), 1.0)
         per_agent_loss = per_agent_num / per_agent_den
 
-        # `agent_coeffs` is required and should be provided by the caller
-        w = jnp.asarray(agent_coeffs, dtype=per_agent_loss.dtype)
+        # `agents_coeffs` is required and should be provided by the caller
+        w = jnp.asarray(agents_coeffs, dtype=per_agent_loss.dtype)
         w = jnp.reshape(w, per_agent_loss.shape)
         loss = jnp.sum(per_agent_loss * w) / jnp.maximum(jnp.sum(w), 1.0)
         loss_dict = {"loss": loss}

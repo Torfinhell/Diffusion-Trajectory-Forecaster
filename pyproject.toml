@@ -37,3 +37,8 @@ dependencies = [
 
 [tool.uv.sources]
 waymo-waymax = { git = "https://github.com/waymo-research/waymax.git", rev = "main" }
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+]

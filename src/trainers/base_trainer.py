@@ -207,7 +207,7 @@ class BaseTrainer(L.LightningModule):
             return step_out["loss"]
 
         batch_size = batch["agent_future"].shape[0]
-        data_shape = self.model.denoise_shape(self.extract_actions)
+        data_shape = self.model.out_shape
         self.sample_key, key = jr.split(self.sample_key)
         sample_keys = jr.split(key, batch_size)
         sampled_pred_batch = self.sample_batch_sol(
@@ -216,6 +216,7 @@ class BaseTrainer(L.LightningModule):
             data_shape,
             batch,
             sample_keys,
+            self.action_len,
         )
 
         def decode_one(sample, agent_past, agent_future):
@@ -354,6 +355,7 @@ class BaseTrainer(L.LightningModule):
         data_shape,
         batch,
         key,
+        action_len: int,
         save_full=False,
     ):
         step_keys = jr.split(key, diffusion_sampler.num_steps + 1)
@@ -363,7 +365,10 @@ class BaseTrainer(L.LightningModule):
         def scan_step(x_t, inputs):
             timestep, step_key = inputs
             timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
-            model_output = model(timestep_arr, x_t, **batch)
+            past = AgentPath(
+                batch["agent_past"], action_len, valid_mask=batch["agent_past_valid"]
+            )
+            model_output = model(timestep_arr, x_t, past_path=past, **batch)
             x_prev = diffusion_sampler.step(step_key, model_output, timestep_arr, x_t)
             return x_prev, x_prev
 
@@ -373,7 +378,13 @@ class BaseTrainer(L.LightningModule):
     @staticmethod
     @eqx.filter_jit
     def sample_batch_sol(
-        model, diffusion_sampler, data_shape, batch, sample_keys, save_full=False
+        model,
+        diffusion_sampler,
+        data_shape,
+        batch,
+        sample_keys,
+        action_len: int,
+        save_full=False,
     ):
         safe_batch = {k: v for k, v in batch.items() if k != "scenario"}
         sample_fn = lambda sample_key, single_batch: BaseTrainer.sample_one_sol(
@@ -382,6 +393,7 @@ class BaseTrainer(L.LightningModule):
             data_shape,
             single_batch,
             sample_key,
+            action_len,
             save_full=save_full,
         )
         return jax.vmap(sample_fn)(sample_keys, safe_batch)

@@ -54,7 +54,6 @@ def _resolve_model_dims(hparams: Any) -> dict[str, int]:
     current_index = int(preprocess.current_index)
     action_len = int(hparams.trainer.action_len)
     extract_actions = bool(hparams.trainer.extract_actions)
-    model_cfg = hparams.model
     model_dim = 91 - current_index - 1
     denoise_steps = max(1, model_dim // action_len) if extract_actions else model_dim
     return {
@@ -83,6 +82,7 @@ def _configure_model_shapes(model_cfg, dims: dict[str, int]) -> None:
         model_cfg.se_args.time_len = past_agent_steps
         model_cfg.se_args.num_feat = 2
         OmegaConf.set_struct(model_cfg, True)
+        return
 
 
 def build_training_modules(hparams: Any, train_mode: str) -> dict[str, Any]:

@@ -48,8 +48,7 @@ def test_inverse_kinematics_recovers_piecewise_actions():
     )
     full_path = jnp.concatenate([current_state[:, None, :], rollout], axis=1)
     obj = AgentPath(full_path, action_len=action_len, ref_idx=0)
-    valid = jnp.ones(full_path.shape[:2], dtype=bool)
-    recovered_actions, _ = obj.actions(valid)
+    recovered_actions, _ = obj.actions()
     assert jnp.allclose(recovered_actions, actions, atol=5e-3)
 
 
@@ -61,8 +60,7 @@ def test_rollout_reconstructs_local_future_xy():
     full_path = jnp.concatenate([current_state[:, None, :], rollout], axis=1)
 
     obj = AgentPath(full_path, action_len=action_len, ref_idx=0)
-    valid = jnp.ones(full_path.shape[:2], dtype=bool)
-    recovered_actions, _ = obj.actions(valid)
+    recovered_actions, _ = obj.actions()
     pred_local_xy = obj.rollout_actions(
         recovered_actions, accel_scale=1.0, yaw_rate_scale=1.0
     )

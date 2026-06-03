@@ -101,7 +101,10 @@ class AgentPath(eqx.Module):
         xy = self.to_local()[..., :2]
         return xy - xy[:, :1, :]
 
-    def actions(self, valid: jnp.ndarray):
+    def actions(self):
+        valid = self.valid_mask
+        if valid is None:
+            valid = jnp.any(self.path[..., :2] != 0, axis=-1)
         return inverse_kinematics(self.to_local(), valid, self.action_len, self.dt)
 
     def current_state_for_rollout(self) -> jnp.ndarray:
@@ -111,29 +114,21 @@ class AgentPath(eqx.Module):
         state = jnp.zeros_like(ref_state)
         return state.at[:, 3:5].set(ref_state[:, 3:5])
 
-    def rollout_actions(
-        self,
-        actions: jnp.ndarray,
-        accel_scale: float = 1.0,
-        yaw_rate_scale: float = 0.15,
-    ) -> jnp.ndarray:
-        scale = jnp.asarray([accel_scale, yaw_rate_scale], dtype=actions.dtype)
-        rolled = roll_out(
-            self.current_state_for_rollout(),
-            actions * scale,
-            self.action_len,
-            self.dt,
-            global_frame=False,
-        )
-        return rolled[..., :2]
-
     def decode_action_sample(
         self,
         sampled: jnp.ndarray,
         accel_scale: float = 1.0,
         yaw_rate_scale: float = 0.15,
     ) -> jnp.ndarray:
-        return self.rollout_actions(sampled, accel_scale, yaw_rate_scale)
+        scale = jnp.asarray([accel_scale, yaw_rate_scale], dtype=sampled.dtype)
+        rolled = roll_out(
+            self.current_state_for_rollout(),
+            sampled * scale,
+            self.action_len,
+            self.dt,
+            global_frame=False,
+        )
+        return rolled[..., :2]
 
     def decode_xy_sample(
         self,
@@ -188,17 +183,3 @@ class AgentPath(eqx.Module):
         local_x = dx * cos_t[..., None] + dy * sin_t[..., None]
         local_y = -dx * sin_t[..., None] + dy * cos_t[..., None]
         return jnp.stack([local_x, local_y], axis=-1)
-
-    def actions_from_anchor(
-        self,
-        actions: jnp.ndarray,
-        accel_scale: float = 1.0,
-        yaw_rate_scale: float = 0.15,
-    ) -> jnp.ndarray:
-        """Roll out `actions` starting from `self` anchor state and return xy trajectory relative to anchor."""
-        scale = jnp.asarray([accel_scale, yaw_rate_scale], dtype=actions.dtype)
-        start_state = self.current_state_for_rollout()
-        rolled = roll_out(
-            start_state, actions * scale, self.action_len, self.dt, global_frame=False
-        )
-        return rolled[..., :2]

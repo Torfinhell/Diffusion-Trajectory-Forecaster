@@ -139,7 +139,7 @@ class KDLoss(eqx.Module):
         weights = jnp.broadcast_to(weights, err.shape)
         l_gt = (err * weights).sum() / jnp.maximum(weights.sum(), 1.0)
 
-        # compute per-agent L_gt then aggregate across agents using agent_coeffs
+        # compute per-agent L_gt then aggregate across agents using agents_coeffs
         if err.ndim < 1:
             raise ValueError("unexpected err shape")
         agent_axes = tuple(range(1, err.ndim))
@@ -147,8 +147,8 @@ class KDLoss(eqx.Module):
         per_agent_den = jnp.maximum(jnp.sum(weights, axis=agent_axes), 1.0)
         per_agent_l_gt = per_agent_num / per_agent_den
 
-        agent_coeffs = kwargs.pop("agent_coeffs")
-        w = jnp.asarray(agent_coeffs, dtype=per_agent_l_gt.dtype)
+        agents_coeffs = kwargs.pop("agents_coeffs")
+        w = jnp.asarray(agents_coeffs, dtype=per_agent_l_gt.dtype)
         w = jnp.reshape(w, per_agent_l_gt.shape)
         l_gt = jnp.sum(per_agent_l_gt * w) / jnp.maximum(jnp.sum(w), 1.0)
 
@@ -162,7 +162,7 @@ class KDLoss(eqx.Module):
         for feat_key, lam in self.lambdas.items():
             if feat_key == "gt" or lam == 0.0:
                 continue
-            # compute per-agent loss for the feature, then aggregate using agent_coeffs
+            # compute per-agent loss for the feature, then aggregate using agents_coeffs
             if feat_key == "out":
                 diff = (student_out - teacher_out) ** 2
                 agent_axes = tuple(range(1, diff.ndim))
@@ -191,8 +191,8 @@ class KDLoss(eqx.Module):
                     # average across layers (per-agent)
                     per_agent = sum(layer_losses) / len(layer_losses)
 
-            # aggregate per-agent values using provided agent_coeffs
-            w = jnp.asarray(agent_coeffs, dtype=per_agent.dtype)
+            # aggregate per-agent values using provided agents_coeffs
+            w = jnp.asarray(agents_coeffs, dtype=per_agent.dtype)
             w = jnp.reshape(w, per_agent.shape)
             loss_term = jnp.sum(per_agent * w) / jnp.maximum(jnp.sum(w), 1.0)
 
@@ -206,7 +206,7 @@ class KDLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
-        agent_coeffs,
+        agents_coeffs,
         key,
         debug=False,
         **kwargs,
@@ -214,7 +214,7 @@ class KDLoss(eqx.Module):
         valid = future_path.valid_mask
         if valid is None:
             valid = jnp.ones((future_path.path.shape[0],), dtype=bool)
-        gt_actions, _ = future_path.actions(valid)
+        gt_actions, _ = future_path.actions()
         action_scale = jnp.asarray(
             [self.accel_scale, self.yaw_rate_scale], dtype=gt_actions.dtype
         )
@@ -222,9 +222,9 @@ class KDLoss(eqx.Module):
 
         n = self.perturbation_per_sample
 
-        # `agent_coeffs` is required and should be provided by the caller
-        if agent_coeffs is not None:
-            kwargs["agent_coeffs"] = agent_coeffs
+        # `agents_coeffs` is required and should be provided by the caller
+        if agents_coeffs is not None:
+            kwargs["agents_coeffs"] = agents_coeffs
 
         if n == 1:
             total, stats = self._loss_one_draw(

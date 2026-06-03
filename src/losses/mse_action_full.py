@@ -20,7 +20,7 @@ class MseActionFullLoss(eqx.Module):
         diffusion_sampler,
         past_path: AgentPath,
         future_path: AgentPath,
-        agent_coeffs,
+        agents_coeffs,
         key,
         debug: bool = False,
         **kwargs,
@@ -29,7 +29,7 @@ class MseActionFullLoss(eqx.Module):
         if valid is None:
             valid = jnp.ones((future_path.path.shape[0],), dtype=bool)
 
-        gt_actions, actions_valid = future_path.actions(valid)
+        gt_actions, actions_valid = future_path.actions()
         action_scale = jnp.asarray(
             [self.accel_scale, self.yaw_rate_scale], dtype=gt_actions.dtype
         )
@@ -80,11 +80,11 @@ class MseActionFullLoss(eqx.Module):
         per_agent_den_xy = jnp.maximum(jnp.sum(v_weights, axis=agent_axes_xy), 1.0)
         per_agent_mse_xy_full = per_agent_num_xy / per_agent_den_xy
 
-        # `agent_coeffs` is required and should be provided by the caller
-        w = jnp.asarray(agent_coeffs, dtype=per_agent_mse_action.dtype)
+        # `agents_coeffs` is required and should be provided by the caller
+        w = jnp.asarray(agents_coeffs, dtype=per_agent_mse_action.dtype)
         w = jnp.reshape(w, per_agent_mse_action.shape)
         mse_action = jnp.sum(per_agent_mse_action * w) / jnp.maximum(jnp.sum(w), 1.0)
-        w_xy = jnp.asarray(agent_coeffs, dtype=per_agent_mse_xy_full.dtype)
+        w_xy = jnp.asarray(agents_coeffs, dtype=per_agent_mse_xy_full.dtype)
         w_xy = jnp.reshape(w_xy, per_agent_mse_xy_full.shape)
         mse_xy_full = jnp.sum(per_agent_mse_xy_full * w_xy) / jnp.maximum(
             jnp.sum(w_xy), 1.0
