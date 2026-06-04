@@ -76,7 +76,7 @@ def run_inference_batch(
     sample0_past = jnp.asarray(batch["agent_past"][0])
     sample0_future = jnp.asarray(batch["agent_future"][0])
     past0 = AgentPath(sample0_past, action_len)
-    future0 = AgentPath(sample0_future, action_len, ref_idx=0)
+    future0 = AgentPath(sample0_future, action_len)
     data_shape = past0.denoise_shape(extract_actions)
     key = jr.PRNGKey(int(time.time_ns() % (2**31)))
     sample_keys = jr.split(key, len(samples))
@@ -90,7 +90,7 @@ def run_inference_batch(
             if k not in {"agent_future", "agent_past"}
         }
         past_path = AgentPath(single_batch["agent_past"], action_len)
-        future_path = AgentPath(single_batch["agent_future"], action_len, ref_idx=0)
+        future_path = AgentPath(single_batch["agent_future"], action_len)
         model_batch["past_path"] = past_path
         sampled = BaseTrainer.sample_one_sol(
             model, diffusion_sampler, data_shape, model_batch, sample_key
@@ -163,11 +163,27 @@ class InferenceQueue:
                         if s.get("scenario") is not None:
                             past_arr = jnp.asarray(s["agent_past"])
                             past_path = AgentPath(
-                                past_arr, int(self.app_cfg.action_len), ref_idx=-1
+                                past_arr, int(self.app_cfg.action_len)
                             )
-                            pred_xy_plot = np.asarray(
-                                past_path.xy_to_global(jnp.asarray(pred_xy_local))
+                            # convert local predictions back to world frame using past_path.ref_coords
+                            anchor = past_path.ref_coords
+                            x0 = anchor[..., 0]
+                            y0 = anchor[..., 1]
+                            theta0 = anchor[..., 2]
+                            cos_t = jnp.cos(theta0)
+                            sin_t = jnp.sin(theta0)
+                            local = jnp.asarray(pred_xy_local)
+                            g_x = (
+                                local[..., 0] * cos_t[..., None]
+                                - local[..., 1] * sin_t[..., None]
+                                + x0[..., None]
                             )
+                            g_y = (
+                                local[..., 0] * sin_t[..., None]
+                                + local[..., 1] * cos_t[..., None]
+                                + y0[..., None]
+                            )
+                            pred_xy_plot = np.asarray(jnp.stack([g_x, g_y], axis=-1))
                         else:
                             pred_xy_plot = pred_xy_local
                         img = render_scenario(s, pred_xy_world=pred_xy_plot)

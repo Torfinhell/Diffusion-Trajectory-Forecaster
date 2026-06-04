@@ -59,21 +59,19 @@ def data_process_agent(scenarios, current_index=10):
 
     agent_past = agents_info[..., : current_index + 1, :]
     agent_future = agents_info[..., current_index + 1 :, :]
-    agent_past_valid = valid_mask[..., : current_index + 1] & has_history[..., None]
-    agent_future_valid = traj.valid[..., current_index + 1 :] & has_history[..., None]
+    agent_past_valid = valid_mask[..., : current_index + 1]
+    agent_future_valid = traj.valid[..., current_index + 1 :]
     agent_past = jnp.where(
         agent_past_valid[..., None],
         agent_past,
         0.0,
     )
     agent_future = jnp.where(agent_future_valid[..., None], agent_future, 0.0)
-
     is_modeled = scenarios.object_metadata.is_modeled
     is_interesting = scenarios.object_metadata.objects_of_interest
     is_valid = scenarios.object_metadata.is_valid
     agents_coeffs = jnp.where(is_modeled & is_interesting, 10.0, 1.0)
-    agents_coeffs = jnp.where(is_valid, agents_coeffs, 0.0)
-
+    agents_coeffs = jnp.where(is_valid & has_history, agents_coeffs, 0.0)
     return {
         "agent_past": agent_past,
         "agent_future": agent_future,

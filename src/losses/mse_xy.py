@@ -29,40 +29,39 @@ class MseXYLoss(eqx.Module):
         debug=False,
         **kwargs,
     ):
-        valid = future_path.valid_mask
-        if valid is None:
-            valid = jnp.ones((future_path.path.shape[0],), dtype=bool)
-        gt_xy = past_path.trajectory_from_anchor(future_path) / self.coord_scale
+        future_local = AgentPath(
+            future_path.path, future_path.action_len, ref_coords=past_path.ref_coords
+        )
+        gt_xy = (future_local.to_local()[..., :2]) / self.coord_scale
+
         timestep_key, noise_key = jr.split(key)
         timestep = jr.randint(
             timestep_key, shape=(), minval=0, maxval=diffusion_sampler.num_steps
         )
         noise = jr.normal(noise_key, gt_xy.shape)
-        y = diffusion_sampler.add_noise(gt_xy, noise, timestep)
-        pred_xy = model(timestep, y, **kwargs)
-        err = (pred_xy - gt_xy) ** 2
-        if err.ndim < 1:
-            raise ValueError("unexpected err shape")
-        agent_axes = tuple(range(1, err.ndim))
-        valid_target = valid
-        if valid_target.ndim == err.ndim - 1:
-            valid_target = valid_target[..., None]
-        weights = jnp.asarray(valid_target, dtype=err.dtype)
-        weights = jnp.broadcast_to(weights, err.shape)
-        per_agent_num = jnp.sum(err * weights, axis=agent_axes)
-        per_agent_den = jnp.maximum(jnp.sum(weights, axis=agent_axes), 1.0)
-        per_agent_loss = per_agent_num / per_agent_den
+        noisy_xy = diffusion_sampler.add_noise(gt_xy, noise, timestep)
+        pred_xy = model(timestep, noisy_xy, **kwargs)
 
-        # `agents_coeffs` is required and should be provided by the caller
-        w = jnp.asarray(agents_coeffs, dtype=per_agent_loss.dtype)
-        w = jnp.reshape(w, per_agent_loss.shape)
+        err = (pred_xy - gt_xy) ** 2
+        agent_axes = tuple(range(1, err.ndim))
+        weights = jnp.broadcast_to(
+            jnp.any(future_path.path != 0, axis=-1, keepdims=True), gt_xy.shape
+        )
+
+        per_agent_loss = jnp.sum(err * weights, axis=agent_axes) / jnp.maximum(
+            jnp.sum(weights, axis=agent_axes), 1.0
+        )
+        w = jnp.reshape(
+            jnp.asarray(agents_coeffs, dtype=per_agent_loss.dtype), per_agent_loss.shape
+        )
         loss = jnp.sum(per_agent_loss * w) / jnp.maximum(jnp.sum(w), 1.0)
+
         loss_dict = {"loss": loss}
         if debug:
-            valid_weights = jnp.asarray(valid, dtype=gt_xy.dtype)
+            valid_weights = jnp.any(future_path.path != 0, axis=-1, keepdims=True)
             loss_dict.update(
                 {
-                    "noisy_abs_mean": masked_abs_mean(y, valid_weights),
+                    "noisy_abs_mean": masked_abs_mean(noisy_xy, valid_weights),
                     "target_abs_mean": masked_abs_mean(gt_xy, valid_weights),
                     "pred_abs_mean": masked_abs_mean(pred_xy, valid_weights),
                     "valid_ratio": jnp.mean(valid_weights),

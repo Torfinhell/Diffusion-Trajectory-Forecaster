@@ -132,7 +132,7 @@ class BaseTrainer(L.LightningModule):
             getattr(self.loss_fn, "coord_scale", 1.0),
         )
 
-    def _decode_sample(self, sampled, past_path, future_path):
+    def _decode_sample(self, sampled, past_path: AgentPath, future_path: AgentPath):
         accel_scale, yaw_rate_scale, coord_scale = self._loss_scales()
         if self.extract_actions:
             return past_path.decode_action_sample(
@@ -219,21 +219,18 @@ class BaseTrainer(L.LightningModule):
             self.action_len,
         )
 
-        def decode_one(sample, agent_past, agent_future):
+        def process_one(sample, agent_past, agent_future):
             past = AgentPath(agent_past, self.action_len)
-            future = AgentPath(agent_future, self.action_len, ref_idx=0)
-            return self._decode_sample(sample, past, future)
+            future_local = AgentPath(
+                agent_future, self.action_len, ref_coords=past.ref_coords
+            )
+            pred_xy = self._decode_sample(sample, past, future_local)
+            gt_xy = future_local.to_local()[..., :2]
+            return pred_xy, gt_xy
 
-        pred_xy_batch = jax.vmap(decode_one)(
+        pred_xy_batch, gt_xy_batch = jax.vmap(process_one)(
             sampled_pred_batch, batch["agent_past"], batch["agent_future"]
         )
-
-        def gt_xy_one(agent_past, agent_future):
-            past = AgentPath(agent_past, self.action_len)
-            future = AgentPath(agent_future, self.action_len, ref_idx=0)
-            return past.trajectory_from_anchor(future)
-
-        gt_xy_batch = jax.vmap(gt_xy_one)(batch["agent_past"], batch["agent_future"])
         batch.update(
             {
                 "pred_xy": pred_xy_batch,
@@ -288,10 +285,14 @@ class BaseTrainer(L.LightningModule):
                 model, diffusion_sampler, loss_fn, batch, key, debug
             )
             grad_norm = optax.global_norm(grads)
-            updates, opt_state = opt_update(grads, opt_state)
+
+            # Extract the inexact arrays (parameters) to pass to the optimizer update function
+            params = eqx.filter(model, eqx.is_inexact_array)
+            updates, opt_state = opt_update(grads, opt_state, params=params)
+
             update_norm = optax.global_norm(updates)
             model = eqx.apply_updates(model, updates)
-            param_norm = optax.global_norm(eqx.filter(model, eqx.is_inexact_array))
+            param_norm = optax.global_norm(params)
         else:
             mean_dict = BaseTrainer.batch_loss_fn(
                 model, diffusion_sampler, loss_fn, batch, key, action_len, debug
@@ -325,14 +326,8 @@ class BaseTrainer(L.LightningModule):
         loss_keys = jr.split(key, jax.tree_util.tree_leaves(batch)[0].shape[0])
 
         def mapped_fn(single_sample_dict, single_key):
-            agent_past = single_sample_dict["agent_past"]
-            agent_future = single_sample_dict["agent_future"]
-            agent_past_valid = single_sample_dict["agent_past_valid"]
-            agent_future_valid = single_sample_dict["agent_future_valid"]
-            past = AgentPath(agent_past, action_len, valid_mask=agent_past_valid)
-            future = AgentPath(
-                agent_future, action_len, ref_idx=0, valid_mask=agent_future_valid
-            )
+            past = AgentPath(single_sample_dict["agent_past"], action_len)
+            future = AgentPath(single_sample_dict["agent_future"], action_len)
             full_loss = loss_fn(
                 model=model,
                 diffusion_sampler=diffusion_sampler,
@@ -365,9 +360,7 @@ class BaseTrainer(L.LightningModule):
         def scan_step(x_t, inputs):
             timestep, step_key = inputs
             timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
-            past = AgentPath(
-                batch["agent_past"], action_len, valid_mask=batch["agent_past_valid"]
-            )
+            past = AgentPath(batch["agent_past"], action_len)
             model_output = model(timestep_arr, x_t, past_path=past, **batch)
             x_prev = diffusion_sampler.step(step_key, model_output, timestep_arr, x_t)
             return x_prev, x_prev
@@ -413,16 +406,26 @@ class BaseTrainer(L.LightningModule):
             pred_xy_plot = self._mask_pred_for_plot(
                 pred_xy_batch[i], batch["agents_coeffs"][i]
             )
-            sample_past = batch["agent_past"][i]
-            sample_future = batch["agent_future"][i]
-            pv = batch.get("agent_past_valid")
-            fv = batch.get("agent_future_valid")
-            past_path = AgentPath(
-                sample_past,
-                self.action_len,
-                valid_mask=(pv[i] if pv is not None else None),
+            past_path = AgentPath(batch["agent_past"][i], self.action_len)
+
+            anchor = past_path.ref_coords
+            x0 = anchor[..., 0]
+            y0 = anchor[..., 1]
+            theta0 = anchor[..., 2]
+            cos_t = jnp.cos(theta0)
+            sin_t = jnp.sin(theta0)
+            local = jnp.asarray(pred_xy_plot)
+            g_x = (
+                local[..., 0] * cos_t[..., None]
+                - local[..., 1] * sin_t[..., None]
+                + x0[..., None]
             )
-            pred_xy_world = past_path.xy_to_global(pred_xy_plot)
+            g_y = (
+                local[..., 0] * sin_t[..., None]
+                + local[..., 1] * cos_t[..., None]
+                + y0[..., None]
+            )
+            pred_xy_world = jnp.stack([g_x, g_y], axis=-1)
             images.append(
                 plot_simulator_state(
                     scenario,

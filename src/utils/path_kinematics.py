@@ -42,6 +42,7 @@ def roll_out(
     dt: float = 0.1,
     global_frame: bool = False,
 ):
+    # Extract initial state components
     x0 = current_state[..., 0]
     y0 = current_state[..., 1]
     theta0 = current_state[..., 2]
@@ -49,21 +50,38 @@ def roll_out(
     v_y0 = current_state[..., 4]
     speed = jnp.sqrt(v_x0**2 + v_y0**2)
 
+    # Repeat actions across time steps
     accel = jnp.repeat(actions[..., 0], action_len, axis=-1)
     yaw_rate = jnp.repeat(actions[..., 1], action_len, axis=-1)
     speed_t = jnp.maximum(speed[..., None] + jnp.cumsum(accel * dt, axis=-1), 0.0)
 
     if global_frame:
-        theta = wrap_angle(theta0[..., None] + jnp.cumsum(yaw_rate * dt, axis=-1))
-        v_x = speed_t * jnp.cos(theta)
-        v_y = speed_t * jnp.sin(theta)
-        x = x0[..., None] + jnp.cumsum(v_x * dt, axis=-1)
-        y = y0[..., None] + jnp.cumsum(v_y * dt, axis=-1)
-    else:
-        theta = wrap_angle(jnp.cumsum(yaw_rate * dt, axis=-1))
-        v_x = speed_t * jnp.cos(theta)
-        v_y = speed_t * jnp.sin(theta)
-        x = jnp.cumsum(v_x * dt, axis=-1)
-        y = jnp.cumsum(v_y * dt, axis=-1)
+        theta_traj = wrap_angle(theta0[..., None] + jnp.cumsum(yaw_rate * dt, axis=-1))
+        v_x_traj = speed_t * jnp.cos(theta_traj)
+        v_y_traj = speed_t * jnp.sin(theta_traj)
+        x_traj = x0[..., None] + jnp.cumsum(v_x_traj * dt, axis=-1)
+        y_traj = y0[..., None] + jnp.cumsum(v_y_traj * dt, axis=-1)
 
-    return jnp.stack([x, y, theta, v_x, v_y], axis=-1)
+        # Construct the initial state to prepend
+        init_state = current_state[..., None, :]
+    else:
+        theta_traj = wrap_angle(jnp.cumsum(yaw_rate * dt, axis=-1))
+        v_x_traj = speed_t * jnp.cos(theta_traj)
+        v_y_traj = speed_t * jnp.sin(theta_traj)
+        x_traj = jnp.cumsum(v_x_traj * dt, axis=-1)
+        y_traj = jnp.cumsum(v_y_traj * dt, axis=-1)
+
+        # Compute local initial velocities for the prepended state
+        cos_t0, sin_t0 = jnp.cos(theta0), jnp.sin(theta0)
+        local_v_x0 = v_x0 * cos_t0 + v_y0 * sin_t0
+        local_v_y0 = -v_x0 * sin_t0 + v_y0 * cos_t0
+
+        # Local frame sets initial x, y, and theta to 0.0
+        zeros = jnp.zeros_like(local_v_x0)
+        init_state = jnp.stack([zeros, zeros, zeros, local_v_x0, local_v_y0], axis=-1)[
+            ..., None, :
+        ]
+
+    # Concatenate the initial state with the generated trajectory along the time dimension
+    traj = jnp.stack([x_traj, y_traj, theta_traj, v_x_traj, v_y_traj], axis=-1)
+    return jnp.concatenate([init_state, traj], axis=-2)

@@ -158,7 +158,7 @@ class WaymoWebDataset(IterableDataset):
             workersplitter=wds.split_by_worker,
         ).decode()
         if self.part == "train":
-            ds = ds.then(shuffle_entire_shard_once)
+            ds = ds.compose(shuffle_entire_shard_once)
         self.meta = meta
         return ds.map(decode_sample)
 

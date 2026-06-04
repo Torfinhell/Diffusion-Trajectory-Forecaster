@@ -30,13 +30,10 @@ class DiffLinear(eqx.Module):
         self.fc_out = eqx.nn.Linear(hid_dim, traj_dim, key=k3)
 
     def __call__(self, t_noise, x_t, past_path: AgentPath, **batch_kwargs):
+        past_traj = past_path.to_local()[..., :2]
+        past_rel = (past_traj - past_traj[:, :1, :]).reshape(-1)
         x = jnp.concatenate(
-            [
-                x_t.reshape(-1),
-                past_path.local_xy().reshape(-1),
-                jnp.atleast_1d(t_noise),
-            ],
-            axis=0,
+            [x_t.reshape(-1), past_rel, jnp.atleast_1d(t_noise)], axis=0
         )
         x = jnn.relu(self.fc1(x))
         x = jnn.relu(self.fc2(x))

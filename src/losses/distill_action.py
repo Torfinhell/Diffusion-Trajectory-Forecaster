@@ -128,7 +128,25 @@ class KDLoss(eqx.Module):
             accel_scale=self.accel_scale,
             yaw_rate_scale=self.yaw_rate_scale,
         )
-        gt_xy = past_path.trajectory_from_anchor(future_path)
+        # compute future path coordinates in past_path's local frame
+        anchor = past_path.ref_coords
+        x = future_path.path[..., 0]
+        y = future_path.path[..., 1]
+        x0 = anchor[..., 0][:, None]
+        y0 = anchor[..., 1][:, None]
+        theta0 = anchor[..., 2][:, None]
+        cos_t = jnp.cos(theta0)
+        sin_t = jnp.sin(theta0)
+        dx = x - x0
+        dy = y - y0
+        local_x = dx * cos_t + dy * sin_t
+        local_y = -dx * sin_t + dy * cos_t
+        gt_xy = jnp.stack([local_x, local_y], axis=-1)
+        if future_path.valid_mask is not None:
+            valid_mask = future_path.valid_mask[..., None]
+        else:
+            valid_mask = jnp.any(future_path.path[..., :5] != 0, axis=-1, keepdims=True)
+        gt_xy = jnp.where(valid_mask, gt_xy, 0.0)
         err = (pred_xy - gt_xy) ** 2
         valid_target = future_path.valid_mask
         if valid_target is None:
