@@ -16,6 +16,7 @@ class DiffAttention(eqx.Module):
     sa_mlp_layers: list[SelfAttentionMLP]
     embed_past: FourierEmbedding
     noise_level_embedding: eqx.nn.Embedding
+    num_diffusion_steps: int
     input_proj: eqx.nn.Sequential
     mlp_out: eqx.nn.Linear
     diagonal_ca: bool
@@ -79,7 +80,7 @@ class DiffAttention(eqx.Module):
         proj1_key, proj2_key = jr.split(proj_key)
         self.input_proj = eqx.nn.Sequential(
             [
-                eqx.nn.Linear(denoise_shape[1] * 2, t_emb_dim, key=proj1_key),
+                eqx.nn.Linear(denoise_shape[1] * 2 + t_emb_dim, t_emb_dim, key=proj1_key),
                 eqx.nn.Lambda(jnn.relu),
                 eqx.nn.Linear(t_emb_dim, camlp_args["out_dim"], key=proj2_key),
             ]
@@ -105,8 +106,9 @@ class DiffAttention(eqx.Module):
         _, a, _, _ = x_t.shape
         x_t_flat = x_t.reshape(a, -1)
         t_emb = self.noise_level_embedding(t_noise)
-        x_t = jax.vmap(self.input_proj)(x_t_flat)  # TODO
-        x_t = x_t + t_emb
+        x_t = jax.vmap(self.input_proj)(
+            jnp.concatenate([x_t_flat, jnp.broadcast_to(t_emb[None], (a, t_emb.shape[0]))], axis=-1)
+        )
 
         valid_agents = ~agents_mask
         valid_context = ~context_mask

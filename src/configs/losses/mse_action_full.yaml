@@ -1,5 +1,5 @@
 extract_actions: true
-action_len: 5
+action_len: 4
 
 loss:
   _target_: src.losses.MseActionFullLoss

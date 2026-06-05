@@ -16,7 +16,7 @@ se_args:
   out_dim: 40
   pos_emb_type: "lookup" #one of "rope", "lookup", "None"
   rope_theta: 0.1
-  combiner_type: "transformer" #or "context_combiner"
+  combiner_type: "transformer" #"transformer"  "context_combiner"
 samlp_args:
   attn_dim: 160
   attn_num_heads: 4
@@ -34,5 +34,4 @@ camlp_args:
   out_dim: 160
   kv_dim: 40
 num_camlp: 4
-out_shape: [32, 80, 2]
 final_out_dim: 32

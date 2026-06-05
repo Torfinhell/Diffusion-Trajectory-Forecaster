@@ -40,7 +40,7 @@ class MseXYLoss(eqx.Module):
         )
         noise = jr.normal(noise_key, gt_xy.shape)
         noisy_xy = diffusion_sampler.add_noise(gt_xy, noise, timestep)
-        pred_xy = model(timestep, noisy_xy, **kwargs)
+        pred_xy = model(timestep, noisy_xy, past_path=past_path, **kwargs)
 
         err = (pred_xy - gt_xy) ** 2
         agent_axes = tuple(range(1, err.ndim))

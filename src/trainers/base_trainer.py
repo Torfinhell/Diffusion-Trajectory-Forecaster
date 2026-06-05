@@ -9,7 +9,7 @@ import pytorch_lightning as L
 from hydra.utils import instantiate
 
 from src.data_module.agent_path import AgentPath
-from src.losses import KDLoss, MseActionLoss, MseXYLoss
+from src.losses import KDLoss, MseActionFullLoss, MseActionLoss, MseXYLoss
 from src.utils import (
     load_best_checkpoint,
     log_model_artifact,
@@ -37,6 +37,7 @@ class BaseTrainer(L.LightningModule):
         extract_actions,
         action_len,
         log_metrics_every_batch=10,
+        train_metric_every_n_epochs=1,
         **kwargs,
     ):
         super().__init__()
@@ -64,8 +65,9 @@ class BaseTrainer(L.LightningModule):
         self.extract_actions = bool(extract_actions)
         self.action_len = int(action_len)
         self.log_metrics_every_batch = log_metrics_every_batch
+        self.train_metric_every_n_epochs = int(train_metric_every_n_epochs)
         if self.extract_actions:
-            assert isinstance(loss_fn, (MseActionLoss, KDLoss))
+            assert isinstance(loss_fn, (MseActionLoss, MseActionFullLoss, KDLoss))
         else:
             assert isinstance(loss_fn, MseXYLoss)
         self._init_trainer_state(cfg_metrics, vis_cfg, kwargs)
@@ -124,6 +126,15 @@ class BaseTrainer(L.LightningModule):
 
     def configure_optimizers(self):
         return []
+
+    @staticmethod
+    def _past_ref_coords(agent_past, agent_past_valid):
+        # (A, T, 5), (A, T) -> (A, 5): last valid past state per agent
+        t = agent_past.shape[-2]
+        idxs = jnp.arange(t)
+        last_valid = jnp.max(jnp.where(agent_past_valid, idxs[None, :], -1), axis=-1)
+        last_valid = jnp.maximum(last_valid, 0)
+        return agent_past[jnp.arange(agent_past.shape[0]), last_valid]
 
     def _loss_scales(self):
         return (
@@ -199,9 +210,11 @@ class BaseTrainer(L.LightningModule):
             "val": self.metrics_val,
             "test": self.metrics_test,
         }.get(kind)
+        epoch_gate = self.current_epoch % self.train_metric_every_n_epochs == 0
         if (
             batch_idx is None
             or metrics_cfg is None
+            or not epoch_gate
             or batch_idx % self.log_metrics_every_batch != 0
         ):
             return step_out["loss"]
@@ -219,17 +232,19 @@ class BaseTrainer(L.LightningModule):
             self.action_len,
         )
 
-        def process_one(sample, agent_past, agent_future):
-            past = AgentPath(agent_past, self.action_len)
+        def process_one(sample, agent_past, agent_future, agent_past_valid):
+            ref_coords = BaseTrainer._past_ref_coords(agent_past, agent_past_valid)
+            past = AgentPath(agent_past, self.action_len, ref_coords=ref_coords)
             future_local = AgentPath(
-                agent_future, self.action_len, ref_coords=past.ref_coords
+                agent_future, self.action_len, ref_coords=ref_coords
             )
             pred_xy = self._decode_sample(sample, past, future_local)
             gt_xy = future_local.to_local()[..., :2]
             return pred_xy, gt_xy
 
         pred_xy_batch, gt_xy_batch = jax.vmap(process_one)(
-            sampled_pred_batch, batch["agent_past"], batch["agent_future"]
+            sampled_pred_batch, batch["agent_past"], batch["agent_future"],
+            batch["agent_past_valid"],
         )
         batch.update(
             {
@@ -241,7 +256,7 @@ class BaseTrainer(L.LightningModule):
         vals = metrics_cfg(**batch)
         self.log_dict(
             {f"{kind}/{k}": float(jnp.asarray(v)) for k, v in vals.items()},
-            prog_bar=kind != "train",
+            prog_bar=True,
             on_step=False,
             on_epoch=True,
             batch_size=batch_size,
@@ -326,8 +341,11 @@ class BaseTrainer(L.LightningModule):
         loss_keys = jr.split(key, jax.tree_util.tree_leaves(batch)[0].shape[0])
 
         def mapped_fn(single_sample_dict, single_key):
-            past = AgentPath(single_sample_dict["agent_past"], action_len)
-            future = AgentPath(single_sample_dict["agent_future"], action_len)
+            ref_coords = BaseTrainer._past_ref_coords(
+                single_sample_dict["agent_past"], single_sample_dict["agent_past_valid"]
+            )
+            past = AgentPath(single_sample_dict["agent_past"], action_len, ref_coords=ref_coords)
+            future = AgentPath(single_sample_dict["agent_future"], action_len, ref_coords=ref_coords)
             full_loss = loss_fn(
                 model=model,
                 diffusion_sampler=diffusion_sampler,
@@ -360,7 +378,7 @@ class BaseTrainer(L.LightningModule):
         def scan_step(x_t, inputs):
             timestep, step_key = inputs
             timestep_arr = jnp.asarray(timestep, dtype=jnp.int32)
-            past = AgentPath(batch["agent_past"], action_len)
+            past = AgentPath(batch["agent_past"], action_len, ref_coords=BaseTrainer._past_ref_coords(batch["agent_past"], batch["agent_past_valid"]))
             model_output = model(timestep_arr, x_t, past_path=past, **batch)
             x_prev = diffusion_sampler.step(step_key, model_output, timestep_arr, x_t)
             return x_prev, x_prev
@@ -406,7 +424,7 @@ class BaseTrainer(L.LightningModule):
             pred_xy_plot = self._mask_pred_for_plot(
                 pred_xy_batch[i], batch["agents_coeffs"][i]
             )
-            past_path = AgentPath(batch["agent_past"][i], self.action_len)
+            past_path = AgentPath(batch["agent_past"][i], self.action_len, ref_coords=BaseTrainer._past_ref_coords(batch["agent_past"][i], batch["agent_past_valid"][i]))
 
             anchor = past_path.ref_coords
             x0 = anchor[..., 0]

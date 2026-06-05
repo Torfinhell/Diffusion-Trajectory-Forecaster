@@ -34,8 +34,9 @@ class TransformerContextCombiner(eqx.Module):
         self.map_proj = eqx.nn.Linear(map_dim, out_dim, use_bias=False, key=mp) if map_dim > 0 else None
         self.tl_proj = eqx.nn.Linear(tl_dim, out_dim, use_bias=False, key=tp) if tl_dim > 0 else None
         self.rel_proj = eqx.nn.Linear(rel_dim, out_dim, use_bias=False, key=rp) if rel_dim > 0 else None
-        self.layers = [
-            SelfAttentionMLP(
+
+        def _make_zero_init_layer(lk):
+            layer = SelfAttentionMLP(
                 attn_dim=out_dim,
                 attn_num_heads=num_heads,
                 out_dim=out_dim,
@@ -44,8 +45,16 @@ class TransformerContextCombiner(eqx.Module):
                 drop_attn=0.0,
                 key=lk,
             )
-            for lk in layer_keys
-        ]
+            # zero-init attn out_proj and MLP last layer → starts as identity
+            layer = eqx.tree_at(
+                lambda l: l.attn.output_proj.weight, layer, jnp.zeros_like(layer.attn.output_proj.weight)
+            )
+            layer = eqx.tree_at(
+                lambda l: l.mlp.layers[-1].weight, layer, jnp.zeros_like(layer.mlp.layers[-1].weight)
+            )
+            return layer
+
+        self.layers = [_make_zero_init_layer(lk) for lk in layer_keys]
 
     def __call__(
         self,

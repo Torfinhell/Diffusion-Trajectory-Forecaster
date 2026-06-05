@@ -55,11 +55,14 @@ def _resolve_model_dims(hparams: Any) -> dict[str, int]:
     action_len = int(hparams.trainer.action_len)
     extract_actions = bool(hparams.trainer.extract_actions)
     model_dim = 91 - current_index - 1
-    denoise_steps = max(1, model_dim // action_len) if extract_actions else model_dim
+    denoise_steps = max(1, (model_dim - 1) // action_len) if extract_actions else model_dim
+    past_agent_steps = current_index + 1
+    past_action_steps = max(1, (past_agent_steps - 1) // action_len)
     return {
         "num_agents": hparams.trainer.num_agents,
         "denoise_steps": denoise_steps,
-        "past_agent_steps": current_index + 1,
+        "past_agent_steps": past_agent_steps,
+        "past_action_steps": past_action_steps,
     }
 
 
@@ -68,6 +71,7 @@ def _configure_model_shapes(model_cfg, dims: dict[str, int]) -> None:
     num_agents = int(dims["num_agents"])
     denoise_steps = int(dims["denoise_steps"])
     past_agent_steps = int(dims["past_agent_steps"])
+    past_action_steps = int(dims["past_action_steps"])
 
     OmegaConf.set_struct(model_cfg, False)
     if getattr(model_cfg, "_target_", "") == "src.models.DiffLinear":
@@ -79,7 +83,7 @@ def _configure_model_shapes(model_cfg, dims: dict[str, int]) -> None:
     if getattr(model_cfg, "_target_", "") == "src.models.DiffAttention":
         model_cfg["denoise_shape"] = [num_agents, denoise_steps, 2]
         model_cfg.final_out_dim = denoise_steps * 2
-        model_cfg.se_args.time_len = past_agent_steps
+        model_cfg.se_args.time_len = past_action_steps
         model_cfg.se_args.num_feat = 2
         OmegaConf.set_struct(model_cfg, True)
         return

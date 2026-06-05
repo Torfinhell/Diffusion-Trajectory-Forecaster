@@ -105,7 +105,8 @@ class SceneEncoder(eqx.Module):
         agents_types=None,
         **kwargs,
     ):
-        encoded_agents = self.agent_encoder(past_path.to_local())
+        past_actions, _ = past_path.actions()
+        encoded_agents = self.agent_encoder(past_actions)
         if agents_types is not None:
             type_ids = jnp.asarray(agents_types, dtype=jnp.int32)
             type_ids = jnp.clip(type_ids, 0, self.type_embedding.num_embeddings - 1)

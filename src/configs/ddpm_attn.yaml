@@ -6,7 +6,7 @@ defaults:
   - metrics: all_metrics
   - visual: default
   - diffusion_sampler: ddpm
-  - losses: xy_loss
+  - losses: mse_action_full
   - _self_
 
 trainer:
@@ -25,6 +25,7 @@ trainer:
   seed: 1
   check_val_every_n_epoch: 1
   log_metrics_every_batch: 10
+  train_metric_every_n_epochs: 5
   print_hparams: False
   logging: "online"
   best_checkpoint_metric: "val/loss"

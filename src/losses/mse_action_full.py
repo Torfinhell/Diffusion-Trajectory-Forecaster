@@ -21,6 +21,7 @@ class MseActionFullLoss(eqx.Module):
         past_path: AgentPath,
         future_path: AgentPath,
         agents_coeffs,
+        agent_future_valid,
         key,
         debug: bool = False,
         **kwargs,
@@ -52,21 +53,10 @@ class MseActionFullLoss(eqx.Module):
             err_actions * a_weights, axis=agent_axes
         ) / jnp.maximum(jnp.sum(a_weights, axis=agent_axes), 1.0)
 
-        pred_full_xy = past_path.decode_action_sample(
+        pred_xy_local = past_path.decode_action_sample(
             pred_actions_norm,
             accel_scale=self.accel_scale,
             yaw_rate_scale=self.yaw_rate_scale,
-        )
-
-        dx = pred_full_xy[..., 0] - past_path.ref_coords[:, 0, None]
-        dy = pred_full_xy[..., 1] - past_path.ref_coords[:, 1, None]
-        cos_t = jnp.cos(past_path.ref_coords[:, 2, None])
-        sin_t = jnp.sin(past_path.ref_coords[:, 2, None])
-        pred_xy_local = jnp.stack(
-            [dx * cos_t + dy * sin_t, -dx * sin_t + dy * cos_t], axis=-1
-        )
-        pred_xy_local = jnp.where(
-            jnp.any(future_path.path != 0, axis=-1, keepdims=True), pred_xy_local, 0.0
         )
 
         future_local = AgentPath(
@@ -76,9 +66,10 @@ class MseActionFullLoss(eqx.Module):
 
         err_xy = (pred_xy_local - gt_xy) ** 2
         agent_axes_xy = tuple(range(1, err_xy.ndim))
-        v_weights = jnp.broadcast_to(
-            jnp.any(future_path.path != 0, axis=-1, keepdims=True), gt_xy.shape
-        )
+        valid = jnp.asarray(agent_future_valid, dtype=err_xy.dtype)
+        if valid.ndim == err_xy.ndim - 1:
+            valid = valid[..., None]
+        v_weights = jnp.broadcast_to(valid, gt_xy.shape)
         per_agent_num_xy = jnp.sum(err_xy * v_weights, axis=agent_axes_xy)
         per_agent_den_xy = jnp.maximum(jnp.sum(v_weights, axis=agent_axes_xy), 1.0)
         per_agent_mse_xy_full = per_agent_num_xy / per_agent_den_xy
@@ -90,4 +81,4 @@ class MseActionFullLoss(eqx.Module):
         mse_action = jnp.sum(per_agent_mse_action * w) / jnp.maximum(jnp.sum(w), 1.0)
         mse_xy_full = jnp.sum(per_agent_mse_xy_full * w) / jnp.maximum(jnp.sum(w), 1.0)
 
-        return {"loss": mse_action, "mse_xy_full": mse_xy_full}
+        return {"loss": mse_xy_full, "mse_action": mse_action}
