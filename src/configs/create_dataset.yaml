@@ -1,0 +1,8 @@
+defaults:
+  - dataset: small_no_scenes
+  - losses: xy_loss
+  - _self_
+
+dataset:
+  data:
+    allow_upload: true

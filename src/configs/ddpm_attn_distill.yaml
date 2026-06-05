@@ -1,0 +1,53 @@
+defaults:
+  - model: diffusion_attn_student
+  - /model@teacher_model: diffusion_attn_teacher
+  - dataloaders: overfit
+  - dataset: small_no_scenes
+  - logger: clearml
+  - metrics: all_metrics
+  - visual: default
+  - diffusion_sampler: ddpm
+  - losses: distill_loss
+  - _self_
+
+trainer:
+  action_len: ${losses.action_len}
+  num_agents: 32
+  extract_actions: ${losses.extract_actions}
+  enable_profiler: false
+  limit_profile_batches: 3
+  teacher_checkpoint: "checkpoints/best45/best.eqx"
+  train_mode: distillation
+  debug: true
+  num_epochs: 15
+  train_epoch_len: 1.0
+  val_epoch_len: 1.0
+  log_validation: true
+  grad_clip: 5
+  seed: 1
+  check_val_every_n_epoch: 1
+  log_metrics_every_batch: 10
+  print_hparams: False
+  logging: "online"
+  best_checkpoint_metric: "val/loss"
+  best_checkpoint_mode: "min"
+  load_best_checkpoint: false
+  run_test_after_fit: false
+  test_with_best_checkpoint: true
+
+dataset:
+  data:
+    s3_url: null
+    data_access: null
+
+loss: ${losses.loss}
+
+optimizer:
+  _target_: optax.adamw
+  weight_decay: 0.0001
+
+scheduler:
+  _target_: optax.cosine_decay_schedule
+  init_value: 5e-3
+  decay_steps: 650
+  alpha: 0.01

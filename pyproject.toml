@@ -29,7 +29,16 @@ dependencies = [
     "setuptools<81",
     "pandas>=3.0.2",
     "xprof-nightly>=2.23.2a20260428",
+    "gradio>=5.0.0",
+    "mediapy>=1.2.0",
+    "imageio>=2.37.3",
+    "locust>=2.44.0",
 ]
 
 [tool.uv.sources]
 waymo-waymax = { git = "https://github.com/waymo-research/waymax.git", rev = "main" }
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+]

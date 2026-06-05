@@ -221,3 +221,5 @@ resolved_config.yaml
 *.zip
 lightning_logs
 clearml
+profile_runs
+notebooks

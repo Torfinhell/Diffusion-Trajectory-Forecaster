@@ -1,0 +1,21 @@
+defaults:
+  - model: diffusion_attn
+  - dataset: small_no_scenes
+  - diffusion_sampler: ddpm
+  - losses: xy_loss
+  - _self_
+
+app:
+  checkpoint_path: checkpoints/best45/best.eqx
+  num_scenarios: 40
+  dataset_split: val
+  server_name: "0.0.0.0"
+  server_port: 7860
+  share: false
+  batch_timeout_ms: 200
+  max_batch_size: 32
+  extract_actions: ${losses.extract_actions}
+  action_len: ${losses.action_len}
+  accel_scale: 1.0
+  yaw_rate_scale: 0.15
+  coord_scale: 1.0

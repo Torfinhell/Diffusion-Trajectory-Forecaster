@@ -10,8 +10,14 @@ from omegaconf import OmegaConf
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.utils.process_param import process_hparams, resolve_scheduler_decay_steps
-from trainers.base_trainer_debug import BaseTrainerDebug
+from src.trainers import BaseTrainer
+from src.utils import (
+    build_training_modules,
+    process_hparams,
+    resolve_epoch_len,
+    resolve_scheduler_decay_steps,
+    split_trainer_config,
+)
 
 
 def _round_to_multiple(value: int, multiple: int) -> int:
@@ -20,9 +26,6 @@ def _round_to_multiple(value: int, multiple: int) -> int:
 
 def apply_scaled_model_params(cfg, trial: optuna.Trial, tune_cfg) -> None:
     width = trial.suggest_categorical("width", list(tune_cfg.search.widths))
-    scene_mlp_ratio = trial.suggest_categorical(
-        "scene_mlp_ratio", list(tune_cfg.search.scene_mlp_ratios)
-    )
     attn_mlp_ratio = trial.suggest_categorical(
         "attn_mlp_ratio", list(tune_cfg.search.attn_mlp_ratios)
     )
@@ -37,22 +40,17 @@ def apply_scaled_model_params(cfg, trial: optuna.Trial, tune_cfg) -> None:
         int(tune_cfg.search.num_camlp.max),
     )
 
-    scene_mlp_dim = _round_to_multiple(
-        width * scene_mlp_ratio, int(tune_cfg.search.mlp_multiple)
-    )
     attn_mlp_dim = _round_to_multiple(
         width * attn_mlp_ratio, int(tune_cfg.search.mlp_multiple)
     )
 
     cfg.model.se_args.out_dim = width
-    cfg.model.se_args.mlp_dim = scene_mlp_dim
     cfg.model.camlp_args.kv_dim = width
     cfg.model.samlp_args.mlp_dim = attn_mlp_dim
     cfg.model.camlp_args.mlp_dim = attn_mlp_dim
     cfg.model.num_sa_mlp = num_sa_mlp
     cfg.model.num_camlp = num_camlp
 
-    trial.set_user_attr("scene_mlp_dim", scene_mlp_dim)
     trial.set_user_attr("attn_mlp_dim", attn_mlp_dim)
 
 
@@ -90,7 +88,6 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
     cfg.trainer.train_epoch_len = tune_cfg.trainer.train_epoch_len
     cfg.trainer.val_epoch_len = tune_cfg.trainer.val_epoch_len
     cfg.trainer.enable_profiler = False
-    cfg.trainer.enable_jax_profiler = False
     cfg.trainer.logging = "disable"
     cfg.visual.enable_visualization = False
     cfg.visual.enable_train_visualization = False
@@ -100,28 +97,26 @@ def build_hparams(tune_cfg, trial: optuna.Trial):
 
 def objective(tune_cfg, trial: optuna.Trial) -> float:
     hparams = build_hparams(tune_cfg, trial)
-    dm = DiffusionTrackerDataModule(
-        hparams.data,
-        hparams.dataloaders,
-    )
+    dm = DiffusionTrackerDataModule(hparams.dataset.data, hparams.dataloaders)
     dm.setup("fit")
     resolve_scheduler_decay_steps(hparams, dm)
+    train_epoch_len = resolve_epoch_len(
+        hparams.trainer.train_epoch_len, len(dm.train_dataloader())
+    )
+    val_epoch_len = resolve_epoch_len(
+        hparams.trainer.val_epoch_len, len(dm.val_dataloader())
+    )
+    val_check_interval = train_epoch_len * int(hparams.trainer.check_val_every_n_epoch)
 
-    diff_model = BaseTrainerDebug(
-        seed=hparams.trainer.seed,
+    _, module_trainer_cfg = split_trainer_config(hparams.trainer)
+    train_mode = hparams.trainer.get("train_mode", "train")
+    modules = build_training_modules(hparams, train_mode)
+    diff_model = BaseTrainer(
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
-        model=hparams.model,
-        loss=hparams.loss,
-        optimizer=hparams.optimizer,
-        scheduler=hparams.scheduler,
-        diffusion_sampler=hparams.diffusion_sampler,
-        grad_clip=hparams.trainer.gradient_clip_val,
-        trainer_cfg=hparams.trainer,
-        prediction_target=hparams.prediction_target,
-        t0=hparams.t0,
-        t1=hparams.t1,
-        dt0=hparams.dt0,
+        debug=True,
+        **modules,
+        **module_trainer_cfg,
     )
 
     trainer = Trainer(
@@ -131,9 +126,10 @@ def objective(tune_cfg, trial: optuna.Trial) -> float:
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=bool(tune_cfg.runtime.show_progress),
-        limit_train_batches=hparams.trainer.train_epoch_len,
-        limit_val_batches=hparams.trainer.val_epoch_len,
-        check_val_every_n_epoch=hparams.trainer.check_val_every_n_epoch,
+        limit_train_batches=train_epoch_len,
+        limit_val_batches=val_epoch_len,
+        val_check_interval=val_check_interval,
+        check_val_every_n_epoch=None,
         num_sanity_val_steps=0,
     )
 

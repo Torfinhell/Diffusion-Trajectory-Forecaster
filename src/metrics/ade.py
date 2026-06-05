@@ -15,7 +15,7 @@ def ade(
 
     Supports any leading batch dims. Expected trailing dims:
     - pred_xy, gt_xy: (..., A, H, 2)
-    - agents_coeffs: (..., A)
+    - agents_coeffs: (..., A) per-agent weights (validity / coeffs)
     - future_valid: (..., A, H, 1) or (..., A, H)
     """
     pred_xy = jnp.asarray(pred_xy)

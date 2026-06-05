@@ -1,0 +1,6 @@
+extract_actions: false
+action_len: 5
+
+loss:
+  _target_: src.losses.MseXYLoss
+  coord_scale: 1.0

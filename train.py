@@ -1,76 +1,101 @@
 import torch.multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
+
 import hydra
 from hydra.utils import instantiate
 from pytorch_lightning.callbacks import RichProgressBar
 from pytorch_lightning.trainer import Trainer
 
 from src.data_module import DiffusionTrackerDataModule
-from src.trainers import BaseProfilerDebug, BaseTrainer, BaseTrainerDebug
-from src.utils import log_run_metadata, process_hparams, resolve_scheduler_decay_steps
+from src.trainers import BaseTrainer, BaseTrainerDistillation
+from src.utils import (
+    JaxProfilerCallback,
+    build_training_modules,
+    load_best_checkpoint,
+    log_run_metadata,
+    process_hparams,
+    resolve_epoch_len,
+    resolve_scheduler_decay_steps,
+    split_trainer_config,
+)
+
+
+def build_callbacks(pl_trainer_cfg, logger_name: str):
+    callbacks = [RichProgressBar(leave=True)]
+    if pl_trainer_cfg.get("enable_profiler", False):
+        log_dir = f"./clearml/{logger_name}/jax_profiler"
+        callbacks.append(
+            JaxProfilerCallback(
+                log_dir=log_dir,
+                limit_profile_batches=int(
+                    pl_trainer_cfg.get("limit_profile_batches", 3)
+                ),
+            )
+        )
+    return callbacks
 
 
 @hydra.main(version_base=None, config_name="ddpm_attn", config_path="src/configs")
 def main(cfg) -> None:
     hparams = process_hparams(cfg, print_hparams=False)
-    logger = None
-    if hparams.get("logger", None) is not None:
-        logger = (
-            instantiate(hparams.logger) if getattr(hparams, "logger", None) else None
-        )
+    logger = instantiate(hparams.logger) if hparams.get("logger") else None
     if logger is not None:
         log_run_metadata(logger, hparams)
 
-    dm = DiffusionTrackerDataModule(
-        hparams.data,
-        hparams.dataloaders,
-    )
+    dm = DiffusionTrackerDataModule(hparams.dataset.data, hparams.dataloaders)
     dm.setup("fit")
     if hparams.trainer.get("train_epoch_len", None) is not None:
         resolve_scheduler_decay_steps(hparams, dm)
 
-    train_mode = cfg.trainer.get("train_mode", "train")
-    trainer_mapping = {
-        "train": BaseTrainer,
-        "debug": BaseTrainerDebug,
-        "profiler": BaseProfilerDebug,
-    }
-    logger_name = logger.name if logger is not None else "default_run"
-    jax_profiler_dir = f"./clearml/{logger_name}/jax_profiler"
-    diff_trainer_kwargs = dict(
-        seed=hparams.trainer.seed,
+    pl_trainer_cfg, module_trainer_cfg = split_trainer_config(hparams.trainer)
+    train_mode = pl_trainer_cfg.get("train_mode", "train")
+    if train_mode not in ("train", "debug", "distillation"):
+        raise ValueError(
+            f"Unknown train_mode={train_mode!r}; expected train, debug, or distillation"
+        )
+
+    modules = build_training_modules(hparams, train_mode)
+    if train_mode == "debug":
+        module_trainer_cfg = {**module_trainer_cfg, "debug": True}
+
+    trainer_common = dict(
         cfg_metrics=hparams.metrics,
         vis_cfg=hparams.visual,
-        model=hparams.model,
-        loss=hparams.loss,
-        optimizer=hparams.optimizer,
-        scheduler=hparams.scheduler,
-        diffusion_sampler=hparams.diffusion_sampler,
-        grad_clip=hparams.trainer.gradient_clip_val,
-        trainer_cfg=hparams.trainer,
-        log_dir=jax_profiler_dir,
-        start_step=cfg.trainer.get("jax_profiler_start_step", 2),
-        num_steps=cfg.trainer.get("jax_profiler_num_steps", 3),
+        **modules,
+        **module_trainer_cfg,
+    )
+    diff_trainer = (
+        BaseTrainerDistillation(**trainer_common)
+        if train_mode == "distillation"
+        else BaseTrainer(**trainer_common)
     )
 
-    diff_trainer = trainer_mapping[train_mode](**diff_trainer_kwargs)
-
-    callbacks = [RichProgressBar(leave=True)]
-    profiler = None
+    train_epoch_len = resolve_epoch_len(
+        pl_trainer_cfg["train_epoch_len"], len(dm.train_dataloader())
+    )
+    val_epoch_len = resolve_epoch_len(
+        pl_trainer_cfg["val_epoch_len"], len(dm.val_dataloader())
+    )
+    logger_name = logger.name if logger is not None else "default_run"
     trainer = Trainer(
         accelerator="gpu",
-        max_epochs=hparams.trainer.num_epochs,
+        max_epochs=pl_trainer_cfg["num_epochs"],
         logger=logger,
-        callbacks=callbacks,
+        callbacks=build_callbacks(pl_trainer_cfg, logger_name),
         enable_progress_bar=True,
-        limit_train_batches=hparams.trainer.train_epoch_len,
-        limit_val_batches=hparams.trainer.val_epoch_len,
-        check_val_every_n_epoch=hparams.trainer.check_val_every_n_epoch,
-        profiler=profiler,
+        limit_train_batches=train_epoch_len,
+        limit_val_batches=val_epoch_len,
+        check_val_every_n_epoch=pl_trainer_cfg.get("check_val_every_n_epoch", 1),
+        limit_test_batches=pl_trainer_cfg.get("test_epoch_len", 1.0),
+        log_every_n_steps=pl_trainer_cfg.get("log_every_n_steps", 1),
     )
-
     trainer.fit(diff_trainer, dm)
+    if bool(pl_trainer_cfg.get("run_test_after_fit", False)):
+        if bool(pl_trainer_cfg.get("test_with_best_checkpoint", True)):
+            load_best_checkpoint(diff_trainer)
+        dm.setup("test")
+        trainer.test(diff_trainer, datamodule=dm)
 
 
 if __name__ == "__main__":

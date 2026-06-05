@@ -1,4 +1,4 @@
 _target_: src.loggers.ClearMLLogger
-project: "ddpm_baseline"
-task: "testing"
+project_name: "ddpm_baseline"
+task_name: "testing"
 output_uri: null

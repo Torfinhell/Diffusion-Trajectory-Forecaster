@@ -1,0 +1,41 @@
+defaults:
+  - model: diffusion_attn
+  - dataloaders: test_only
+  - dataset: inference
+  - logger: clearml
+  - metrics: all_metrics
+  - visual: default
+  - diffusion_sampler: ddpm
+  - losses: xy_loss
+  - _self_
+
+trainer:
+  train_mode: "inference"
+  action_len: ${losses.action_len}
+  extract_actions: ${losses.extract_actions}
+  num_epochs: 1
+  test_epoch_len: 1.0
+  test_with_best_checkpoint: true
+  log_metrics_every_batch: 1
+  seed: 1
+  print_hparams: false
+  logging: "online"
+  grad_clip: 5.0
+  log_validation: false
+
+dataset:
+  data:
+    s3_url: null
+    data_access: null
+
+loss: ${losses.loss}
+
+optimizer:
+  _target_: optax.adamw
+  weight_decay: 0.0001
+
+scheduler:
+  _target_: optax.cosine_decay_schedule
+  init_value: 5e-3
+  decay_steps: 650
+  alpha: 0.01

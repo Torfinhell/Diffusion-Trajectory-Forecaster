@@ -288,6 +288,7 @@ def plot_simulator_state(
     pred_clip_to_view: bool = True,  # prevent long lines to offscreen garbage
     pred_raw_plot: bool = False,  # if True, plot raw predictions without filtering/masking
     gt_linewidth: float = 2.0,
+    **kwargs,
 ) -> np.ndarray:
 
     if batch_idx > -1:

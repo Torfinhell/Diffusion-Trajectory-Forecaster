@@ -1,6 +1,16 @@
 train:
   _target_: src.metrics.MetricFnCollection
   metrics: [ade, fde]
+  object_type_ids: [1, 2, 3]
+  object_type_labels:
+    1: vehicle
+    2: pedestrian
+    3: cyclist
 val:
   _target_: src.metrics.MetricFnCollection
   metrics: [ade, fde]
+  object_type_ids: [1, 2, 3]
+  object_type_labels:
+    1: vehicle
+    2: pedestrian
+    3: cyclist
