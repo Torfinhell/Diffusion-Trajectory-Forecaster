@@ -39,26 +39,26 @@ class JaxProfilerCallback(Callback):
             )
 
     def on_train_epoch_start(self, trainer, pl_module):
-        if self._train_done:
+        if trainer.sanity_checking or self._train_done:
             return
         self._start("train")
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if self._train_done or self._active_stage != "train":
+        if trainer.sanity_checking or self._train_done or self._active_stage != "train":
             return
         if batch_idx + 1 >= self.limit_profile_batches:
             self._stop_and_upload(trainer, "train")
             self._train_done = True
 
     def on_validation_epoch_start(self, trainer, pl_module):
-        if self._val_done:
+        if trainer.sanity_checking or self._val_done:
             return
         self._start("val")
 
     def on_validation_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
-        if self._val_done or self._active_stage != "val":
+        if trainer.sanity_checking or self._val_done or self._active_stage != "val":
             return
         if batch_idx + 1 >= self.limit_profile_batches:
             self._stop_and_upload(trainer, "val")
