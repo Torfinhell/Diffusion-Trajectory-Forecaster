@@ -1,10 +1,10 @@
 import math
 import os
-from collections.abc import Mapping
 
 import grain.python as grain
 import numpy as np
 import pytorch_lightning as L
+from absl import flags
 from hydra.utils import instantiate
 
 from src.data_module.wb_dataset import WebDatasetGrainSource
@@ -38,6 +38,11 @@ def num_batches(dataset, batch_size: int, drop_remainder: bool = False) -> int:
     return max(1, math.ceil(n / batch_size)) if n else 0
 
 
+def _ensure_grain_flags_parsed(*_args) -> None:
+    if not flags.FLAGS.is_parsed():
+        flags.FLAGS.mark_as_parsed()
+
+
 def _resolve_worker_count(worker_count):
     if worker_count is None:
         return os.cpu_count() or 4
@@ -57,6 +62,7 @@ class GrainLoader:
 
 
 def build_grain_dataloader(dataset, cfg) -> GrainLoader:
+    _ensure_grain_flags_parsed()
     batch_size = int(cfg.batch_size)
     drop_remainder = bool(cfg.get("drop_remainder", False))
     processed = WebDatasetGrainSource(dataset).batch(
@@ -64,10 +70,14 @@ def build_grain_dataloader(dataset, cfg) -> GrainLoader:
         drop_remainder=drop_remainder,
         batch_fn=collate_fn,
     )
-    worker_count = _resolve_worker_count(cfg.get("worker_count", 0))
+    worker_count = min(_resolve_worker_count(cfg.get("worker_count", 0)), 1)
     if worker_count > 0:
         processed = processed.mp_prefetch(
-            grain.MultiprocessingOptions(num_workers=worker_count)
+            grain.MultiprocessingOptions(
+                num_workers=worker_count,
+                enable_profiling=False,
+            ),
+            worker_init_fn=_ensure_grain_flags_parsed,
         )
     return GrainLoader(processed, num_batches(dataset, batch_size, drop_remainder))
 
