@@ -15,7 +15,7 @@ trainer:
   action_len: ${losses.action_len}
   extract_actions: ${losses.extract_actions}
   enable_profiler: false
-  limit_profile_batches: 3
+  limit_profile_batches: 10
   debug: false
   num_epochs: 10
   train_epoch_len: 1.0

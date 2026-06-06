@@ -15,7 +15,7 @@ trainer:
   num_agents: 32
   extract_actions: ${losses.extract_actions}
   enable_profiler: false
-  limit_profile_batches: 3
+  limit_profile_batches: 10
   teacher_checkpoint: "checkpoints/best45/best.eqx"
   train_mode: distillation
   debug: true

@@ -105,7 +105,7 @@ def read_local_index(local: Path) -> Dict[str, Any]:
 def write_webdataset(
     local: Path, samples: Any, flush_every: int, remote: Optional[S3Storage]
 ) -> Path:
-    """Serializes an iterable collection of samples into WebDataset tar shards containing NumPy arrays and pickled data objects. Handles automatic chunking and conditional uploading to an S3 bucket destination."""
+    """Serializes an iterable collection of samples into WebDataset tar shards containing NumPy arrays and pickled data objects."""
     if local.exists():
         return local
     local.mkdir(parents=True, exist_ok=True)
@@ -126,7 +126,7 @@ def write_webdataset(
             row = {"__key__": f"{i:09d}"}
             for k, v in sample.items():
                 if k == "scenario" and v is not None:
-                    row["scenario.pkl"] = pickle.dumps(v)
+                    row["scenario.pickle"] = pickle.dumps(v)
                 elif k != "scenario":
                     row[f"{k}.npy"] = np.asarray(v)
             sink.write(row)
@@ -155,7 +155,7 @@ def decode_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in sample.items():
         if key in skip:
             continue
-        if key == "scenario.pkl":
+        if key == "scenario.pickle":
             out["scenario"] = value
         elif key.endswith(".npy"):
             out[key[:-4]] = value
