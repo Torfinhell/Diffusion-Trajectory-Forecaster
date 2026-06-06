@@ -1,9 +1,13 @@
+import math
+import os
 from collections.abc import Mapping
 
+import grain.python as grain
 import numpy as np
 import pytorch_lightning as L
-from flax.jax_utils import prefetch_to_device
 from hydra.utils import instantiate
+
+from src.data_module.wb_dataset import WebDatasetGrainSource
 
 DATASET_SHARED_KEYS = ("allow_upload", "s3_url", "data_access", "dataset_root")
 
@@ -25,6 +29,47 @@ def collate_fn(states):
         for k in states[0]
         if k not in m_keys
     }
+
+
+def num_batches(dataset, batch_size: int, drop_remainder: bool = False) -> int:
+    n = len(dataset)
+    if drop_remainder:
+        return max(1, n // batch_size) if n else 0
+    return max(1, math.ceil(n / batch_size)) if n else 0
+
+
+def _resolve_worker_count(worker_count):
+    if worker_count is None:
+        return os.cpu_count() or 4
+    return int(worker_count)
+
+
+class GrainLoader:
+    def __init__(self, dataset, num_batches: int):
+        self._dataset = dataset
+        self._num_batches = num_batches
+
+    def __iter__(self):
+        return iter(self._dataset)
+
+    def __len__(self):
+        return self._num_batches
+
+
+def build_grain_dataloader(dataset, cfg) -> GrainLoader:
+    batch_size = int(cfg.batch_size)
+    drop_remainder = bool(cfg.get("drop_remainder", False))
+    processed = WebDatasetGrainSource(dataset).batch(
+        batch_size=batch_size,
+        drop_remainder=drop_remainder,
+        batch_fn=collate_fn,
+    )
+    worker_count = _resolve_worker_count(cfg.get("worker_count", 0))
+    if worker_count > 0:
+        processed = processed.mp_prefetch(
+            grain.MultiprocessingOptions(num_workers=worker_count)
+        )
+    return GrainLoader(processed, num_batches(dataset, batch_size, drop_remainder))
 
 
 class DiffusionTrackerDataModule(L.LightningDataModule):
@@ -51,29 +96,14 @@ class DiffusionTrackerDataModule(L.LightningDataModule):
     def train_dataloader(self):
         if self.cfg_dl.get("train", None) is None:
             return None
-        return instantiate(
-            self.cfg_dl.train,
-            collate_fn=collate_fn,
-            dataset=self.train_dataset,
-        )
-        # return prefetch_to_device(dl, size=2)
+        return build_grain_dataloader(self.train_dataset, self.cfg_dl.train)
 
     def val_dataloader(self):
         if self.cfg_dl.get("val", None) is None:
             return None
-        return instantiate(
-            self.cfg_dl.val,
-            collate_fn=collate_fn,
-            dataset=self.val_dataset,
-        )
-        # return prefetch_to_device(dl, size=2)
+        return build_grain_dataloader(self.val_dataset, self.cfg_dl.val)
 
     def test_dataloader(self):
         if self.cfg_dl.get("test", None) is None:
             return None
-        return instantiate(
-            self.cfg_dl.test,
-            collate_fn=collate_fn,
-            dataset=self.test_dataset,
-        )
-        # return prefetch_to_device(dl, size=2)
+        return build_grain_dataloader(self.test_dataset, self.cfg_dl.test)

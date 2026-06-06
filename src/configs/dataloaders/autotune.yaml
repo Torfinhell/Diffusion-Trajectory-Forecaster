@@ -1,0 +1,10 @@
+train:
+  batch_size: 32
+  worker_count: null
+  drop_remainder: true
+val:
+  batch_size: 32
+  worker_count: null
+test:
+  batch_size: 32
+  worker_count: null

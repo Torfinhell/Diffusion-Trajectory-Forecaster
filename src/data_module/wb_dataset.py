@@ -1,18 +1,16 @@
 import dataclasses
-import io
 import logging
-import math
-import pickle
 import random
 from itertools import islice
 from pathlib import Path
 
+import grain.python as grain
 import jax
 import jax.numpy as jnp
-import numpy as np
 import webdataset as wds
+from grain._src.python.dataset import base
+from grain._src.python.dataset import dataset as grain_dataset
 from hydra.utils import instantiate, to_absolute_path
-from torch.utils.data import IterableDataset, get_worker_info
 from tqdm.auto import tqdm
 from waymax import config, dataloader
 
@@ -47,7 +45,32 @@ def shuffle_entire_shard_once(src):
         yield from flush()
 
 
-class WaymoWebDataset(IterableDataset):
+class _WdsIterator(grain_dataset.DatasetIterator):
+    def __init__(self, wds_iter):
+        super().__init__()
+        self._it = iter(wds_iter)
+        self._ctx = base.IteratorContext()
+
+    def __next__(self):
+        return next(self._it)
+
+    def get_state(self):
+        return {}
+
+    def set_state(self, _state):
+        pass
+
+
+class WebDatasetGrainSource(grain.IterDataset):
+    def __init__(self, dataset: "WaymoWebDataset"):
+        super().__init__()
+        self._dataset = dataset
+
+    def __iter__(self):
+        return _WdsIterator(self._dataset._open_webdataset())
+
+
+class WaymoWebDataset:
     NAME = "waymo_webdataset"
 
     def __init__(
@@ -130,30 +153,23 @@ class WaymoWebDataset(IterableDataset):
                 yield row
 
     def load_meta(self) -> dict:
-        if self.meta is not None:
-            return self.meta
         if self.remote is not None:
             assert self.data_access in ("stream", "cache"), self.data_access
             assert (
                 self.remote.exists()
             ), f"{self.remote.prefix} missing; run create_dataset"
             if self.data_access == "cache":
-                self.meta = self.remote.sync_to(self.local)
-                return self.meta
+                return self.remote.sync_to(self.local)
             if (self.local / "index.json").is_file():
-                self.meta = read_local_index(self.local)
-                return self.meta
-            self.meta = self.remote.read_index()
-            return self.meta
+                return read_local_index(self.local)
+            return self.remote.read_index()
         assert self.local.exists(), f"{self.local} missing; run create_dataset"
-        self.meta = read_local_index(self.local)
-        return self.meta
+        return read_local_index(self.local)
 
     def _shard_sources(self, meta: dict) -> list[str]:
         if self.data_access == "stream":
             assert self.remote is not None
-            return self.remote.stream_sources(meta)
-
+            return 1
         paths = sorted(self.local.glob(meta.get("shard_glob", "shard-*.tar")))
         assert paths, self.local
         return [str(p) for p in paths]
@@ -161,38 +177,18 @@ class WaymoWebDataset(IterableDataset):
     def _open_webdataset(self):
         meta = self.load_meta()
         sources = self._shard_sources(meta)
-
         ds = wds.WebDataset(
             sources,
             shardshuffle=len(sources) if self.part == "train" else False,
             nodesplitter=wds.split_by_node,
             workersplitter=wds.split_by_worker,
-        )
-
-        def custom_decoder(key, data):
-            if key.endswith(".pickle"):
-                return pickle.loads(data)
-            if key.endswith(".npy"):
-                return np.load(io.BytesIO(data))
-            return None
-
-        ds = ds.decode(custom_decoder)
-
+        ).decode()
         if self.part == "train":
             ds = ds.compose(shuffle_entire_shard_once)
-
-        if self.part == "train":
-            ds = ds.compose(shuffle_entire_shard_once)
-
+        self.meta = meta
         return ds.map(decode_sample)
 
-    def __iter__(self):
-        worker_ds = self._open_webdataset()
-        return iter(worker_ds)
-
     def __len__(self):
-        meta = self.load_meta()
-        worker_info = get_worker_info()
-        if worker_info is None:
-            return int(meta["num_samples"])
-        return int(math.ceil(int(meta["num_samples"]) / float(worker_info.num_workers)))
+        if self.meta is None:
+            self.meta = self.load_meta()
+        return int(self.meta["num_samples"])
