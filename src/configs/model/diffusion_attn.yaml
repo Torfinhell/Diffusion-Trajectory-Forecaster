@@ -34,4 +34,5 @@ camlp_args:
   out_dim: 160
   kv_dim: 40
 num_camlp: 4
+num_diffusion_steps: 50
 final_out_dim: 32

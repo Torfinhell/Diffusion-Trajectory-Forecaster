@@ -3,7 +3,47 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 
-from src.models.components.attention import SelfAttentionMLP
+class _PreNormSelfAttentionMLP(eqx.Module):
+    """Pre-norm residual block: x = x + sublayer(norm(x)).
+
+    Unlike the shared post-norm `SelfAttentionMLP` (x = norm(x + sublayer(x))),
+    pre-norm lets a zero-initialized sublayer output make the whole block an
+    exact identity at init (x + 0 == x); LayerNorm itself is not an identity
+    map for arbitrary inputs, so post-norm cannot reach true identity even
+    with zeroed sublayer weights. True identity at init is required here —
+    see the project's "encoder before kv_cond must start as identity" rule.
+    """
+
+    attn: eqx.nn.MultiheadAttention
+    dropout_key: jax.random.PRNGKey
+    mlp: eqx.nn.MLP
+    norm1: eqx.nn.LayerNorm
+    norm2: eqx.nn.LayerNorm
+
+    def __init__(self, attn_dim, attn_num_heads, out_dim, mlp_dim, num_mlp_layers, drop_attn, key):
+        attn_key, mlp_key, self.dropout_key = jr.split(key, 3)
+        assert attn_dim % attn_num_heads == 0, "attn_dim must be divisible by num_heads"
+        self.attn = eqx.nn.MultiheadAttention(
+            num_heads=attn_num_heads,
+            query_size=attn_dim,
+            dropout_p=drop_attn,
+            key=attn_key,
+        )
+        self.mlp = eqx.nn.MLP(
+            in_size=attn_dim,
+            width_size=mlp_dim,
+            depth=max(num_mlp_layers - 1, 0),
+            out_size=out_dim,
+            key=mlp_key,
+        )
+        self.norm1 = eqx.nn.LayerNorm(shape=attn_dim)
+        self.norm2 = eqx.nn.LayerNorm(shape=attn_dim)
+
+    def __call__(self, x, attn_mask=None):
+        h = jax.vmap(self.norm1)(x)
+        x = x + self.attn(h, h, h, mask=attn_mask, key=self.dropout_key)
+        h = jax.vmap(self.norm2)(x)
+        return x + jax.vmap(self.mlp)(h)
 
 
 class TransformerContextCombiner(eqx.Module):
@@ -30,13 +70,27 @@ class TransformerContextCombiner(eqx.Module):
         layer_keys = jr.split(lk, num_layers)
 
         self.out_dim = out_dim
-        self.agent_proj = eqx.nn.Linear(agent_dim, out_dim, use_bias=False, key=ap)
-        self.map_proj = eqx.nn.Linear(map_dim, out_dim, use_bias=False, key=mp) if map_dim > 0 else None
-        self.tl_proj = eqx.nn.Linear(tl_dim, out_dim, use_bias=False, key=tp) if tl_dim > 0 else None
-        self.rel_proj = eqx.nn.Linear(rel_dim, out_dim, use_bias=False, key=rp) if rel_dim > 0 else None
+        agent_proj = eqx.nn.Linear(agent_dim, out_dim, use_bias=False, key=ap)
+        # identity init: agent_dim == out_dim always (see scene_encoder), so the
+        # combiner's entry token starts as a verbatim copy of agent_encodings —
+        # matching ContextCombiner's identity-passthrough behavior at init.
+        assert agent_dim == out_dim, (agent_dim, out_dim)
+        self.agent_proj = eqx.tree_at(
+            lambda l: l.weight, agent_proj, jnp.eye(out_dim, agent_dim)
+        )
+
+        def _zero_linear(in_dim, k):
+            lin = eqx.nn.Linear(in_dim, out_dim, use_bias=False, key=k)
+            return eqx.tree_at(lambda l: l.weight, lin, jnp.zeros_like(lin.weight))
+
+        self.map_proj = _zero_linear(map_dim, mp) if map_dim > 0 else None
+        self.tl_proj = _zero_linear(tl_dim, tp) if tl_dim > 0 else None
+        # zero-init: added directly onto the agent token (line below), so a
+        # random init would corrupt it at step 0 just like agent_proj would.
+        self.rel_proj = _zero_linear(rel_dim, rp) if rel_dim > 0 else None
 
         def _make_zero_init_layer(lk):
-            layer = SelfAttentionMLP(
+            layer = _PreNormSelfAttentionMLP(
                 attn_dim=out_dim,
                 attn_num_heads=num_heads,
                 out_dim=out_dim,
@@ -45,13 +99,15 @@ class TransformerContextCombiner(eqx.Module):
                 drop_attn=0.0,
                 key=lk,
             )
-            # zero-init attn out_proj and MLP last layer → starts as identity
+            # zero-init attn out_proj and MLP last layer (incl. biases) →
+            # sublayer output is exactly 0 → pre-norm residual is identity
             layer = eqx.tree_at(
                 lambda l: l.attn.output_proj.weight, layer, jnp.zeros_like(layer.attn.output_proj.weight)
             )
-            layer = eqx.tree_at(
-                lambda l: l.mlp.layers[-1].weight, layer, jnp.zeros_like(layer.mlp.layers[-1].weight)
-            )
+            last = layer.mlp.layers[-1]
+            layer = eqx.tree_at(lambda l: l.mlp.layers[-1].weight, layer, jnp.zeros_like(last.weight))
+            if last.bias is not None:
+                layer = eqx.tree_at(lambda l: l.mlp.layers[-1].bias, layer, jnp.zeros_like(last.bias))
             return layer
 
         self.layers = [_make_zero_init_layer(lk) for lk in layer_keys]

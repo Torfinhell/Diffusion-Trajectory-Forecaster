@@ -7,7 +7,7 @@ import pytorch_lightning as L
 from absl import flags
 from hydra.utils import instantiate
 
-from src.data_module.wb_dataset import WebDatasetGrainSource
+from src.data_module.wds_loader import WebDatasetGrainSource
 
 DATASET_SHARED_KEYS = ("allow_upload", "s3_url", "data_access", "dataset_root")
 
@@ -70,7 +70,7 @@ def build_grain_dataloader(dataset, cfg) -> GrainLoader:
         drop_remainder=drop_remainder,
         batch_fn=collate_fn,
     )
-    worker_count = min(_resolve_worker_count(cfg.get("worker_count", 0)), 1)
+    worker_count = _resolve_worker_count(cfg.get("worker_count", 0))
     if worker_count > 0:
         processed = processed.mp_prefetch(
             grain.MultiprocessingOptions(

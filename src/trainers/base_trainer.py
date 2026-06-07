@@ -38,6 +38,7 @@ class BaseTrainer(L.LightningModule):
         action_len,
         log_metrics_every_batch=10,
         train_metric_every_n_epochs=1,
+        max_train_metric_batches=None,
         **kwargs,
     ):
         super().__init__()
@@ -66,6 +67,9 @@ class BaseTrainer(L.LightningModule):
         self.action_len = int(action_len)
         self.log_metrics_every_batch = log_metrics_every_batch
         self.train_metric_every_n_epochs = int(train_metric_every_n_epochs)
+        self.max_train_metric_batches = (
+            int(max_train_metric_batches) if max_train_metric_batches is not None else None
+        )
         if self.extract_actions:
             assert isinstance(loss_fn, (MseActionLoss, MseActionFullLoss, KDLoss))
         else:
@@ -211,10 +215,18 @@ class BaseTrainer(L.LightningModule):
             "test": self.metrics_test,
         }.get(kind)
         epoch_gate = self.current_epoch % self.train_metric_every_n_epochs == 0
+        max_tmb = self.max_train_metric_batches
+        batch_limit_gate = (
+            kind != "train"
+            or max_tmb is None
+            or batch_idx is None
+            or batch_idx < max_tmb
+        )
         if (
             batch_idx is None
             or metrics_cfg is None
             or not epoch_gate
+            or not batch_limit_gate
             or batch_idx % self.log_metrics_every_batch != 0
         ):
             return step_out["loss"]

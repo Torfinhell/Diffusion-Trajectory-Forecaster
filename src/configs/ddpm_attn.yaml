@@ -17,7 +17,7 @@ trainer:
   enable_profiler: false
   limit_profile_batches: 10
   debug: false
-  num_epochs: 10
+  num_epochs: 41
   train_epoch_len: 1.0
   val_epoch_len: 1.0
   log_validation: true
@@ -26,11 +26,12 @@ trainer:
   check_val_every_n_epoch: 1
   log_metrics_every_batch: 10
   train_metric_every_n_epochs: 5
+  max_train_metric_batches: 12
   print_hparams: False
   logging: "online"
   best_checkpoint_metric: "val/loss"
   best_checkpoint_mode: "min"
-  load_best_checkpoint: false
+  load_best_checkpoint: true
   run_test_after_fit: false
   test_with_best_checkpoint: true
 

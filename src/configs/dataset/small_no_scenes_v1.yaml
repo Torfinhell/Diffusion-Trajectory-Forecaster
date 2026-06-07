@@ -1,0 +1,11 @@
+defaults:
+  - small_no_scenes
+  - _self_
+
+data:
+  train:
+    _target_: src.data_module.wb_dataset_v1.WaymoWebDatasetV1
+  val:
+    _target_: src.data_module.wb_dataset_v1.WaymoWebDatasetV1
+  test:
+    _target_: src.data_module.wb_dataset_v1.WaymoWebDatasetV1

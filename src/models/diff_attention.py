@@ -4,7 +4,11 @@ import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jr
 
-from src.models.components.attention import CrossAttentionMLP, SelfAttentionMLP
+from src.models.components.attention import (
+    CrossAttentionMLP,
+    GatedCrossAttentionMLP,
+    SelfAttentionMLP,
+)
 from src.models.components.fourier import FourierEmbedding
 from src.models.encoders.scene import SceneEncoder
 
@@ -12,7 +16,7 @@ from src.models.encoders.scene import SceneEncoder
 class DiffAttention(eqx.Module):
     encoder: SceneEncoder
     out_shape: tuple[int, ...]
-    ca_mlp_layers: list[CrossAttentionMLP]
+    ca_mlp_layers: list
     sa_mlp_layers: list[SelfAttentionMLP]
     embed_past: FourierEmbedding
     noise_level_embedding: eqx.nn.Embedding
@@ -59,14 +63,24 @@ class DiffAttention(eqx.Module):
         self.sa_mlp_layers = [
             SelfAttentionMLP(**samlp_args, key=layer_key) for layer_key in sa_keys
         ]
+        # Resolve diagonal vs full CA up front: the CA layer *type* depends on it.
+        # Full CA (each agent attends all context tokens) is the documented
+        # failure mode, so when it's active we use the gated, identity-at-init
+        # variant that ramps context in gradually instead of corrupting the
+        # denoiser's kv_cond from step 1.
+        self.diagonal_ca = (
+            diagonal_ca if diagonal_ca is not None else (combiner_type != "transformer")
+        )
         ca_keys = jr.split(ca_mlp_key, num_camlp)
         camlp_kwargs = dict(camlp_args)
         kv_dim = camlp_kwargs.pop("kv_dim")
+        ca_cls = CrossAttentionMLP if self.diagonal_ca else GatedCrossAttentionMLP
         self.ca_mlp_layers = [
-            CrossAttentionMLP(**camlp_kwargs, kv_dim=kv_dim, key=layer_key)
+            ca_cls(**camlp_kwargs, kv_dim=kv_dim, key=layer_key)
             for layer_key in ca_keys
         ]
         t_emb_dim = camlp_args["out_dim"]
+        self.num_diffusion_steps = num_diffusion_steps
         self.noise_level_embedding = eqx.nn.Embedding(
             num_diffusion_steps, t_emb_dim, key=future_key
         )
@@ -86,9 +100,6 @@ class DiffAttention(eqx.Module):
             ]
         )
         self.out_shape = tuple(denoise_shape)
-        self.diagonal_ca = (
-            diagonal_ca if diagonal_ca is not None else (combiner_type != "transformer")
-        )
 
     def _forward_impl(self, t_noise, x_t, *, collect_features: bool, **batch_kwargs):
         if x_t.ndim == 3:

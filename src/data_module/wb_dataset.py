@@ -1,73 +1,18 @@
 import dataclasses
 import logging
-import random
 from itertools import islice
 from pathlib import Path
 
-import grain.python as grain
 import jax
 import jax.numpy as jnp
-import webdataset as wds
-from grain._src.python.dataset import base
-from grain._src.python.dataset import dataset as grain_dataset
 from hydra.utils import instantiate, to_absolute_path
 from tqdm.auto import tqdm
 from waymax import config, dataloader
 
 from src.data_module.data_process import data_process_scenarios_batch
-from src.data_module.storage import (
-    S3Storage,
-    decode_sample,
-    read_local_index,
-    write_webdataset,
-)
+from src.data_module.storage import S3Storage, read_local_index, write_webdataset
 
 LOGGER = logging.getLogger(__name__)
-
-
-def shuffle_entire_shard_once(src):
-    """Shuffle samples within each tar shard; shard order comes from shardshuffle."""
-    current_shard = None
-    shard_samples = []
-
-    def flush():
-        random.shuffle(shard_samples)
-        yield from shard_samples
-        shard_samples.clear()
-
-    for sample in src:
-        sample_shard = sample.get("__url__")
-        if current_shard is not None and sample_shard != current_shard:
-            yield from flush()
-        current_shard = sample_shard
-        shard_samples.append(sample)
-    if shard_samples:
-        yield from flush()
-
-
-class _WdsIterator(grain_dataset.DatasetIterator):
-    def __init__(self, wds_iter):
-        super().__init__()
-        self._it = iter(wds_iter)
-        self._ctx = base.IteratorContext()
-
-    def __next__(self):
-        return next(self._it)
-
-    def get_state(self):
-        return {}
-
-    def set_state(self, _state):
-        pass
-
-
-class WebDatasetGrainSource(grain.IterDataset):
-    def __init__(self, dataset: "WaymoWebDataset"):
-        super().__init__()
-        self._dataset = dataset
-
-    def __iter__(self):
-        return _WdsIterator(self._dataset._open_webdataset())
 
 
 class WaymoWebDataset:
@@ -173,20 +118,6 @@ class WaymoWebDataset:
         paths = sorted(self.local.glob(meta.get("shard_glob", "shard-*.tar")))
         assert paths, self.local
         return [str(p) for p in paths]
-
-    def _open_webdataset(self):
-        meta = self.load_meta()
-        sources = self._shard_sources(meta)
-        ds = wds.WebDataset(
-            sources,
-            shardshuffle=len(sources) if self.part == "train" else False,
-            nodesplitter=wds.split_by_node,
-            workersplitter=wds.split_by_worker,
-        ).decode()
-        if self.part == "train":
-            ds = ds.compose(shuffle_entire_shard_once)
-        self.meta = meta
-        return ds.map(decode_sample)
 
     def __len__(self):
         if self.meta is None:

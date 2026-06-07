@@ -28,10 +28,12 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /uvx /bin/
 
 RUN mkdir -p /tmp/home /tmp/uv-cache /opt/venv && chmod -R 777 /tmp/home /tmp/uv-cache /opt/venv
 
-COPY pyproject.toml uv.lock README.md ./
-RUN --mount=type=cache,target=/tmp/uv-cache uv sync --frozen --no-install-project
+# Clone a clean copy from the public remote rather than COPY-ing the local
+# working tree: guarantees the image only ever contains committed code (no
+# local secrets/caches/scratch files can leak into a layer), and keeps the
+# build context minimal/fast.
+RUN git clone --depth 1 https://github.com/Torfinhell/Diffusion-Trajectory-Forecaster.git .
 
-COPY . .
 RUN --mount=type=cache,target=/tmp/uv-cache uv sync --frozen
 RUN chmod -R 777 /opt/venv
 

@@ -1,0 +1,48 @@
+defaults:
+  - feat_extract: default
+
+data:
+  allow_upload: false
+  s3_url: null
+  data_access: null
+  train:
+    _target_: src.data_module.wb_dataset.WaymoWebDataset
+    part: train
+    path: data/exp_5k/train
+    flush_every: 256
+    creation_cfg:
+      raw_data_url: gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord@1000
+      waymax_conf_version: WOD_1_3_1_TRAINING
+      batch_size: 32
+      num_states: 5000
+      max_num_objects: 32
+      extract_scene: false
+      preprocessing: ${dataset.feat_extract.preprocessing}
+  val:
+    _target_: src.data_module.wb_dataset.WaymoWebDataset
+    part: val
+    path: data/exp_5k/val
+    flush_every: 256
+    creation_cfg:
+      raw_data_url: gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150
+      waymax_conf_version: WOD_1_3_1_TRAINING
+      batch_size: 32
+      start_index: 0
+      num_states: 700
+      max_num_objects: 32
+      extract_scene: false
+      preprocessing: ${dataset.feat_extract.preprocessing}
+  test:
+    _target_: src.data_module.wb_dataset.WaymoWebDataset
+    part: test
+    path: data/exp_5k/test
+    flush_every: 256
+    creation_cfg:
+      raw_data_url: gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150
+      waymax_conf_version: WOD_1_3_1_TRAINING
+      batch_size: 32
+      start_index: 500
+      num_states: 500
+      max_num_objects: 32
+      extract_scene: false
+      preprocessing: ${dataset.feat_extract.preprocessing}

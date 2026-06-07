@@ -1,10 +1,10 @@
 train:
-  batch_size: 100
-  worker_count: 1
+  batch_size: 80
+  worker_count: 0
   drop_remainder: true
 val:
-  batch_size: 1
+  batch_size: 80
   worker_count: 0
 test:
-  batch_size: 1
+  batch_size: 80
   worker_count: 0
