@@ -1,0 +1,8 @@
+# VBD with the full cross-agent causal decoder enabled.
+# Identical to ddpm_vbd except model.cross_agent_causal=true.
+defaults:
+  - ddpm_vbd
+  - _self_
+
+model:
+  cross_agent_causal: true
