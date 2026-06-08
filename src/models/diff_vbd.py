@@ -147,12 +147,14 @@ class CrossTransformer(eqx.Module):
     norm2: eqx.nn.LayerNorm
     num_heads: int = eqx.field(static=True)
     head_dim: int = eqx.field(static=True)
+    residual: bool = eqx.field(static=True)
 
-    def __init__(self, dim, heads, key):
+    def __init__(self, dim, heads, key, residual: bool = True):
         kq, kk, kv, ko, kf = jr.split(key, 5)
         assert dim % heads == 0
         self.num_heads = int(heads)
         self.head_dim = dim // heads
+        self.residual = bool(residual)
         self.q_proj = _linear(dim, dim, kq)
         self.k_proj = _linear(dim, dim, kk)
         self.v_proj = _linear(dim, dim, kv)
@@ -183,6 +185,12 @@ class CrossTransformer(eqx.Module):
         out = jnp.einsum("hqk,qkhd->qhd", attn, v).reshape(nq, d)
         out = jax.vmap(self.out_proj)(out)
 
+        # Faithful VBD adds the query residual so the noised actions / timestep
+        # signal carried by ``query`` actually propagates to the prediction.
+        # Without it the block collapses to a context-conditioned mean and the
+        # sampling chain drifts (toggle via ``cross_residual``).
+        if self.residual:
+            out = out + query
         x = jax.vmap(self.norm1)(out)
         f = self.ffn(x)
         return jax.vmap(self.norm2)(f + x)
@@ -228,6 +236,7 @@ class DiffVBD(eqx.Module):
         extract_traffic: bool = True,
         extract_relations: bool = True,
         cross_agent_causal: bool = False,
+        cross_residual: bool = True,
     ):
         (
             se_key,
@@ -276,7 +285,7 @@ class DiffVBD(eqx.Module):
             for k in jr.split(self_key, num_self_layers)
         ]
         self.cross_layers = [
-            CrossTransformer(dim, heads, k)
+            CrossTransformer(dim, heads, k, residual=bool(cross_residual))
             for k in jr.split(cross_key, num_cross_layers)
         ]
         self.out_decoder = eqx.nn.MLP(
