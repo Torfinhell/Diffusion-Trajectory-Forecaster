@@ -1,6 +1,5 @@
 import numpy as np
 from pytorch_lightning.loggers.logger import Logger
-from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 from clearml import Task
 
@@ -25,7 +24,10 @@ class ClearMLLogger(Logger):
     def version(self) -> str:
         return self._task.id
 
-    @rank_zero_only
+    # NOTE: no @rank_zero_only -- training is single-GPU here, and the decorator
+    # silently no-ops ALL logging if a stray RANK/LOCAL_RANK/SLURM_PROCID env var
+    # is nonzero (common on cloud/k8s/SLURM hosts), which produced "task created
+    # but no scalars/plots" on remote machines.
     def log_metrics(self, metrics, step=None):
         if step is not None and step > self._global_step:
             self._global_step = step
@@ -34,11 +36,9 @@ class ClearMLLogger(Logger):
         for k, v in metrics.items():
             self._clearml_logger.report_scalar("metrics", k, v, self._global_step)
 
-    @rank_zero_only
     def log_hyperparams(self, params, *args, **kwargs):
         self._task.connect(params)
 
-    @rank_zero_only
     def log_image(self, key, images, step=None):
         for i, img in enumerate(images):
             self._clearml_logger.report_image(
@@ -48,6 +48,5 @@ class ClearMLLogger(Logger):
                 image=np.asarray(img),
             )
 
-    @rank_zero_only
     def upload_artifact(self, name, path, metadata=None):
         self._task.upload_artifact(name, str(path), metadata=metadata)

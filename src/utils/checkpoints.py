@@ -50,6 +50,10 @@ def maybe_save_best_checkpoint(model, metrics) -> None:
         f"Saved best checkpoint to {checkpoint_path} "
         f"({model.best_checkpoint_metric}={score:.6f})"
     )
+    # Upload to the ClearML server immediately on every improvement so an
+    # ephemeral/remote machine dying mid-run still leaves the best checkpoint on
+    # the server (re-uploads overwrite the same "best_checkpoint" artifact).
+    log_model_artifact(model)
 
 
 def log_model_artifact(model) -> None:

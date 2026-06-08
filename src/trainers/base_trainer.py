@@ -203,7 +203,11 @@ class BaseTrainer(L.LightningModule):
             },
             prog_bar=False,
             on_step=True,
-            on_epoch=False,
+            # on_epoch=True so the bare key (e.g. "val/loss") resolves to the
+            # epoch mean in callback_metrics -- maybe_save_best_checkpoint reads
+            # exactly that key, so step-only logging left it None and never
+            # saved. Emits both "*/loss_step" and "*/loss_epoch".
+            on_epoch=True,
             batch_size=batch["agent_future"].shape[0],
         )
         if is_train:
