@@ -163,7 +163,7 @@ class CrossTransformer(eqx.Module):
         self.norm1 = eqx.nn.LayerNorm(dim)
         self.norm2 = eqx.nn.LayerNorm(dim)
 
-    def __call__(self, query, key, relations=None, key_mask=None):
+    def __call__(self, query, key, relations=None, key_mask=None, attn_mask=None):
         # key, value get relations added (VBD: key = key + relations; value = key)
         if relations is not None:
             kv_in = key[None] + relations  # [Q, K, D]
@@ -180,7 +180,11 @@ class CrossTransformer(eqx.Module):
 
         logits = jnp.einsum("qhd,qkhd->hqk", q, k) / jnp.sqrt(self.head_dim)
         if key_mask is not None:
+            # [K] key-padding mask broadcast across heads/queries
             logits = logits - key_mask[None, None, :].astype(logits.dtype) * 1e9
+        if attn_mask is not None:
+            # [Q, K] per-pair mask (e.g. cross-agent causal), True == masked
+            logits = logits - attn_mask[None].astype(logits.dtype) * 1e9
         attn = jnn.softmax(logits, axis=-1)  # [h, Q, K]
         out = jnp.einsum("hqk,qkhd->qhd", attn, v).reshape(nq, d)
         out = jax.vmap(self.out_proj)(out)
@@ -208,7 +212,7 @@ class DiffVBD(eqx.Module):
     encoder: SceneEncoder
     noise_level_embedding: eqx.nn.Embedding
     time_embedding: eqx.nn.Embedding
-    action_in: eqx.nn.MLP
+    state_in: eqx.nn.MLP
     self_layers: list
     cross_layers: list
     out_decoder: eqx.nn.MLP
@@ -219,6 +223,8 @@ class DiffVBD(eqx.Module):
     num_agents: int = eqx.field(static=True)
     cross_agent_causal: bool = eqx.field(static=True)
     dt: float = eqx.field(static=True)
+    accel_scale: float = eqx.field(static=True)
+    yaw_rate_scale: float = eqx.field(static=True)
 
     def __init__(
         self,
@@ -236,7 +242,9 @@ class DiffVBD(eqx.Module):
         extract_traffic: bool = True,
         extract_relations: bool = True,
         cross_agent_causal: bool = False,
-        cross_residual: bool = True,
+        cross_residual: bool = False,
+        accel_scale: float = 1.0,
+        yaw_rate_scale: float = 0.15,
     ):
         (
             se_key,
@@ -269,6 +277,8 @@ class DiffVBD(eqx.Module):
         self.num_actions = int(num_actions)
         self.action_len = int(action_len)
         self.dt = float(dt)
+        self.accel_scale = float(accel_scale)
+        self.yaw_rate_scale = float(yaw_rate_scale)
         # Diffusion variable shape (matches DiffAttention's denoise_shape
         # convention): [num_agents, num_actions, 2]. The sampler uses this as
         # the noise shape, so it MUST include the agent dimension.
@@ -276,20 +286,29 @@ class DiffVBD(eqx.Module):
 
         self.noise_level_embedding = eqx.nn.Embedding(num_diffusion_steps, dim, key=nl_key)
         self.time_embedding = eqx.nn.Embedding(self.num_actions, dim, key=t_key)
-        # per-action-token encoder: [accel, yaw_rate] -> dim
-        self.action_in = eqx.nn.MLP(
-            in_size=2, width_size=dim, depth=1, out_size=dim, key=in_key
+        # Faithful VBD query: the noised actions are rolled out (kinematics) to a
+        # noisy TRAJECTORY [x, y, theta, v_x, v_y]; each action-window of states
+        # is encoded and max-pooled. ``state_in`` is VBD's ``decoder.encoder``
+        # (5 -> dim), applied per state, then max-pooled over the action window.
+        self.state_in = eqx.nn.MLP(
+            in_size=5, width_size=dim // 2, depth=1, out_size=dim, key=in_key
         )
+        # Decoder: faithful VBD interleaves [causal-self, cross-to-scene] blocks
+        # with a mid-residual. Both roles use CrossTransformer (the reference
+        # reuses CrossTransformer for the masked self-attention over the
+        # flattened all-agent token set). We build two stages of two layers each.
+        ck = jr.split(cross_key, 4)
         self.self_layers = [
-            SelfTransformer(dim, heads, k)
-            for k in jr.split(self_key, num_self_layers)
+            CrossTransformer(dim, heads, ck[0], residual=bool(cross_residual)),
+            CrossTransformer(dim, heads, ck[2], residual=bool(cross_residual)),
         ]
         self.cross_layers = [
-            CrossTransformer(dim, heads, k, residual=bool(cross_residual))
-            for k in jr.split(cross_key, num_cross_layers)
+            CrossTransformer(dim, heads, ck[1], residual=bool(cross_residual)),
+            CrossTransformer(dim, heads, ck[3], residual=bool(cross_residual)),
         ]
+        # VBD's act decoder: Linear(dim,128) ELU Dropout Linear(128,2)
         self.out_decoder = eqx.nn.MLP(
-            in_size=dim, width_size=dim, depth=1, out_size=2, key=out_key
+            in_size=dim, width_size=dim // 2, depth=1, out_size=2, key=out_key
         )
         # Cross-agent causal mask over flattened [A*T] tokens (token order is
         # agent-major: index = agent*T + time). True == masked (cannot attend).
@@ -302,6 +321,36 @@ class DiffVBD(eqx.Module):
         same_agent = ai[:, None] == ai[None, :]
         allowed = same_agent | (ti[None, :] <= ti[:, None])  # [A*T, A*T]
         self.causal_mask = ~allowed
+
+    def _build_query(self, t_noise, x_t, past_path):
+        """Faithful VBD query: roll out noised actions -> noisy local trajectory,
+        encode each state, max-pool over the action window, add time + noise-level
+        embeddings. Returns ``[A, T, D]``."""
+        a, t, _ = x_t.shape
+        # un-normalize actions (VBD rolls out in physical units) then roll out in
+        # the per-agent LOCAL frame -> [A, T*action_len + 1, 5].
+        scale = jnp.asarray(
+            [self.accel_scale, self.yaw_rate_scale], dtype=x_t.dtype
+        )
+        traj = roll_out(
+            past_path.ref_coords,
+            x_t * scale,
+            self.action_len,
+            self.dt,
+            global_frame=False,
+        )
+        # drop the prepended initial state so the T*action_len states reshape
+        # cleanly into [T, action_len, 5] (matches VBD's reshape semantics).
+        traj = traj[:, 1:, :]  # [A, T*action_len, 5]
+        traj = traj.reshape(a, t, self.action_len, 5)  # [A, T, action_len, 5]
+
+        # encode each state (5 -> D) and max-pool over the action window
+        state_emb = jax.vmap(jax.vmap(jax.vmap(self.state_in)))(traj)  # [A,T,al,D]
+        future_states = jnp.max(state_emb, axis=2)  # [A, T, D]
+
+        t_emb = jax.vmap(self.time_embedding)(jnp.arange(t))  # [T, D]
+        nl_emb = self.noise_level_embedding(t_noise)  # [D]
+        return future_states + t_emb[None] + nl_emb[None, None]  # [A, T, D]
 
     def __call__(self, t_noise, x_t, *, past_path, **batch):
         # x_t: [A, num_actions, 2] noised actions (a leading singleton batch
@@ -318,37 +367,51 @@ class DiffVBD(eqx.Module):
         encodings = enc["encodings"]  # [Ctx, D]
         context_mask = enc["context_mask"]  # [Ctx] True == invalid
 
-        # query: per-agent, per-action-token embedding of the noised actions
-        action_emb = jax.vmap(jax.vmap(self.action_in))(x_t)  # [A, T, D]
-        t_emb = jax.vmap(self.time_embedding)(jnp.arange(t))  # [T, D]
-        nl_emb = self.noise_level_embedding(t_noise)  # [D]
-        query = action_emb + t_emb[None] + nl_emb[None, None]  # [A, T, D]
+        query = self._build_query(t_noise, x_t, past_path)  # [A, T, D]
 
+        # --- faithful VBD decoder: two stages of [self-attn, cross-to-scene]
+        # with a mid-residual. Stage layout per agent i:
+        #   h = cross_self(query_i over tokens) ; h = cross_scene(h, encodings)
+        #   h = h + query_i                       (mid residual)
+        #   h = cross_self(h over tokens) ; h = cross_scene(h, encodings)
+        #   out = decoder(h)
+        # The self-attn step's "tokens" are either this agent's own action
+        # tokens (per-agent mode) or the flattened all-agent set with the
+        # cross-agent causal mask (cross_agent_causal mode).
         if self.cross_agent_causal:
-            # Joint self-attention over all agents' action tokens with the
-            # cross-agent causal mask, then per-agent cross-attention to scene.
-            x = query.reshape(a * t, -1)  # [A*T, D]
-            for layer in self.self_layers:
-                x = layer(x, None, self.causal_mask)
-            x = x.reshape(a, t, -1)
+            flat_q = query.reshape(a * t, -1)  # [A*T, D]
 
-            def cross_agent(x_agent):  # [T, D]
-                for layer in self.cross_layers:
-                    x_agent = layer(
-                        x_agent, encodings, relations=None, key_mask=context_mask
+            def stage(h_flat, self_layer, cross_layer):
+                # masked self-attention over all agents' tokens
+                h_flat = self_layer(
+                    h_flat, h_flat, relations=None, attn_mask=self.causal_mask
+                )
+                # per-agent cross-attention to the scene
+                h = h_flat.reshape(a, t, -1)
+                h = jax.vmap(
+                    lambda hi: cross_layer(
+                        hi, encodings, relations=None, key_mask=context_mask
                     )
-                return jax.vmap(self.out_decoder)(x_agent)
+                )(h)
+                return h.reshape(a * t, -1)
 
-            return jax.vmap(cross_agent)(x)  # [A, T, 2]
+            h = stage(flat_q, self.self_layers[0], self.cross_layers[0])
+            h = h + flat_q  # mid-residual
+            h = stage(h, self.self_layers[1], self.cross_layers[1])
+            out = jax.vmap(jax.vmap(self.out_decoder))(h.reshape(a, t, -1))
+            return out  # [A, T, 2]
 
-        # per-agent decode: each agent attends only over its OWN action tokens,
-        # then over the scene encodings ("faithful minus cross-agent causal").
-        def decode_agent(q_agent):  # q_agent: [T, D]
-            x = q_agent
-            for layer in self.self_layers:
-                x = layer(x, None, None)  # temporal self-attention over own tokens
-            for layer in self.cross_layers:
-                x = layer(x, encodings, relations=None, key_mask=context_mask)
-            return jax.vmap(self.out_decoder)(x)  # [T, 2]
+        # per-agent mode: self-attention is over the agent's OWN action tokens.
+        def decode_agent(q_agent):  # [T, D]
+            h = self.self_layers[0](q_agent, q_agent, relations=None, attn_mask=None)
+            h = self.cross_layers[0](
+                h, encodings, relations=None, key_mask=context_mask
+            )
+            h = h + q_agent  # mid-residual
+            h = self.self_layers[1](h, h, relations=None, attn_mask=None)
+            h = self.cross_layers[1](
+                h, encodings, relations=None, key_mask=context_mask
+            )
+            return jax.vmap(self.out_decoder)(h)  # [T, 2]
 
         return jax.vmap(decode_agent)(query)  # [A, T, 2]
