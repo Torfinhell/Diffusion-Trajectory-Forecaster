@@ -27,4 +27,4 @@ action_len: ${losses.action_len}
 num_diffusion_steps: 50
 dt: 0.1
 cross_agent_causal: false   # true => joint cross-agent causal decoder (full VBD)
-cross_residual: true        # add query residual in cross-attn
+cross_residual: false
