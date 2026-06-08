@@ -88,6 +88,14 @@ def _configure_model_shapes(model_cfg, dims: dict[str, int]) -> None:
         OmegaConf.set_struct(model_cfg, True)
         return
 
+    if getattr(model_cfg, "_target_", "") == "src.models.DiffVBD":
+        model_cfg.num_actions = denoise_steps
+        model_cfg.se_args.num_agents = num_agents
+        model_cfg.se_args.time_len = past_action_steps
+        model_cfg.se_args.num_feat = 2
+        OmegaConf.set_struct(model_cfg, True)
+        return
+
 
 def build_training_modules(hparams: Any, train_mode: str) -> dict[str, Any]:
     """Instantiate model, loss, optimizer state, and PRNG keys from Hydra config."""
