@@ -50,3 +50,18 @@ class ClearMLLogger(Logger):
 
     def upload_artifact(self, name, path, metadata=None):
         self._task.upload_artifact(name, str(path), metadata=metadata)
+
+    def save(self) -> None:
+        # Force-flush buffered scalars. ClearML batches scalar reports and sends
+        # them on a background timer; artifacts upload eagerly. On an ephemeral /
+        # killed remote run the process can exit before the timer's final flush,
+        # so checkpoints (artifacts) survive but scalars are silently lost. Lightning
+        # calls save() at checkpoint/epoch boundaries -- flush here so scalars land.
+        if self._clearml_logger is not None:
+            self._clearml_logger.flush()
+
+    def finalize(self, status: str) -> None:
+        if self._clearml_logger is not None:
+            self._clearml_logger.flush()
+        if self._task is not None:
+            self._task.flush(wait_for_uploads=True)

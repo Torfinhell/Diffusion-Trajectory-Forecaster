@@ -24,6 +24,7 @@ class DiffAttention(eqx.Module):
     input_proj: eqx.nn.Sequential
     mlp_out: eqx.nn.Linear
     diagonal_ca: bool
+    mid_residual: bool
 
     def __init__(
         self,
@@ -40,6 +41,7 @@ class DiffAttention(eqx.Module):
         extract_traffic: bool = True,
         extract_relations: bool = True,
         diagonal_ca: bool | None = None,
+        mid_residual: bool = False,
     ):
         se_key, ca_mlp_key, sa_mlp_key, out_key, future_key, past_key, proj_key = (
             jr.split(key, 7)
@@ -71,6 +73,11 @@ class DiffAttention(eqx.Module):
         self.diagonal_ca = (
             diagonal_ca if diagonal_ca is not None else (combiner_type != "transformer")
         )
+        # VBD-style stage-level residual: split the SA/CA layers into two
+        # [self, cross] stages and add the projected query back between them.
+        # Needs >=2 of each to form two stages; otherwise fall back to the flat
+        # (current) path so the flag is a no-op rather than an error.
+        self.mid_residual = bool(mid_residual) and num_sa_mlp >= 2 and num_camlp >= 2
         ca_keys = jr.split(ca_mlp_key, num_camlp)
         camlp_kwargs = dict(camlp_args)
         kv_dim = camlp_kwargs.pop("kv_dim")
@@ -131,18 +138,39 @@ class DiffAttention(eqx.Module):
 
         x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
         sa = [] if collect_features else None
-        for layer in self.sa_mlp_layers:
-            x_t = layer(x_t, attn_mask=self_attn_mask)
-            x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
-            if collect_features:
-                sa.append(x_t)
-
         ca = [] if collect_features else None
-        for layer in self.ca_mlp_layers:
-            x_t = layer(x_t, kv_cond, attn_mask=cross_attn_mask)
+
+        def run_sa(x, layers):
+            for layer in layers:
+                x = layer(x, attn_mask=self_attn_mask)
+                x = jnp.where(agents_mask[:, None], 0.0, x)
+                if collect_features:
+                    sa.append(x)
+            return x
+
+        def run_ca(x, layers):
+            for layer in layers:
+                x = layer(x, kv_cond, attn_mask=cross_attn_mask)
+                x = jnp.where(agents_mask[:, None], 0.0, x)
+                if collect_features:
+                    ca.append(x)
+            return x
+
+        if self.mid_residual:
+            # VBD stage layout: two [self, cross] stages with the projected
+            # query (q0) added back between them. Splitting each layer list in
+            # half preserves total layer count and ordering.
+            q0 = x_t
+            n_sa, n_ca = len(self.sa_mlp_layers) // 2, len(self.ca_mlp_layers) // 2
+            x_t = run_sa(x_t, self.sa_mlp_layers[:n_sa])
+            x_t = run_ca(x_t, self.ca_mlp_layers[:n_ca])
+            x_t = x_t + q0  # mid-residual
             x_t = jnp.where(agents_mask[:, None], 0.0, x_t)
-            if collect_features:
-                ca.append(x_t)
+            x_t = run_sa(x_t, self.sa_mlp_layers[n_sa:])
+            x_t = run_ca(x_t, self.ca_mlp_layers[n_ca:])
+        else:
+            x_t = run_sa(x_t, self.sa_mlp_layers)
+            x_t = run_ca(x_t, self.ca_mlp_layers)
 
         out = jax.vmap(self.mlp_out)(x_t).reshape(self.out_shape)
         if not collect_features:
