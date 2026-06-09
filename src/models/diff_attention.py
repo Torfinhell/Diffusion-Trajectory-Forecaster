@@ -24,7 +24,7 @@ class DiffAttention(eqx.Module):
     input_proj: eqx.nn.Sequential
     mlp_out: eqx.nn.Linear
     diagonal_ca: bool
-    mid_residual: bool
+    mid_residual: bool = eqx.field(static=True)
 
     def __init__(
         self,

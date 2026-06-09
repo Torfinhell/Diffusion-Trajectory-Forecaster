@@ -16,7 +16,7 @@ data:
       batch_size: 32
       num_states: 100
       max_num_objects: 32
-      extract_scene: false
+      extract_scene: true
       preprocessing: ${dataset.feat_extract.preprocessing}
   val:
     _target_: src.data_module.wb_dataset.WaymoWebDataset
@@ -28,9 +28,9 @@ data:
       waymax_conf_version: WOD_1_3_1_TRAINING
       batch_size: 32
       start_index: 0
-      num_states: 200
+      num_states: 100
       max_num_objects: 32
-      extract_scene: false
+      extract_scene: true
       preprocessing: ${dataset.feat_extract.preprocessing}
   test:
     _target_: src.data_module.wb_dataset.WaymoWebDataset
@@ -41,8 +41,9 @@ data:
       raw_data_url: gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150
       waymax_conf_version: WOD_1_3_1_TRAINING
       batch_size: 32
-      start_index: 200
+      start_index: 100
       num_states: 100
       max_num_objects: 32
-      extract_scene: false
+      extract_scene: true
       preprocessing: ${dataset.feat_extract.preprocessing}
+      

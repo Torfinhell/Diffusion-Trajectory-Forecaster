@@ -5,6 +5,14 @@ defaults:
   - losses: xy_loss
   - _self_
 
+# Minimal trainer block: _resolve_model_dims needs these to patch the model
+# config's input/output shapes (num_agents, action_len, extract_actions) so the
+# instantiated architecture matches the saved checkpoint.
+trainer:
+  num_agents: 32
+  action_len: ${losses.action_len}
+  extract_actions: ${losses.extract_actions}
+
 app:
   checkpoint_path: checkpoints/best45/best.eqx
   num_scenarios: 40

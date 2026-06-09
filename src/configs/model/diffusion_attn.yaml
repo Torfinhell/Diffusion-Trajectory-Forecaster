@@ -36,3 +36,7 @@ camlp_args:
 num_camlp: 4
 num_diffusion_steps: 50
 final_out_dim: 32
+# VBD-style stage-level residual: split SA/CA into two [self, cross] stages and
+# add the projected query back between them. Needs num_sa_mlp>=2 & num_camlp>=2
+# (else silently no-op). Default false keeps the current flat decoder unchanged.
+mid_residual: false
