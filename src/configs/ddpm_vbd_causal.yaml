@@ -1,7 +1,0 @@
-# VBD with the full cross-agent causal decoder enabled.
-defaults:
-  - ddpm_vbd
-  - _self_
-
-model:
-  cross_agent_causal: true
